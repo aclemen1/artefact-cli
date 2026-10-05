@@ -33,6 +33,7 @@ type Card struct {
 	Keyed     string           `yaml:"keyed,omitempty" json:"-"`
 	Deposited string           `yaml:"deposited" json:"deposited"`
 	Updated   string           `yaml:"updated" json:"updated"`
+	Archived  string           `yaml:"archived,omitempty" json:"archived,omitempty"` // date it was archived
 	DC        map[string]any   `yaml:"dc,omitempty" json:"dc,omitempty"`
 	Classes   map[string]Class `yaml:"classes,omitempty" json:"classes,omitempty"`
 	Holders   []index.Holder   `yaml:"holders" json:"holders"`

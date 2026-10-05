@@ -131,13 +131,14 @@ func init() {
 	spec.Register(&spec.Action{
 		Category: "plans", Name: "review", Right: "read",
 		Summary:    "List the artefacts whose retention has ended, with the rule that applies.",
-		Discussion: "With several plans, the longest keep wins. A held artefact (card holds) is marked held. Nothing is destroyed: a disposal goes through `artefact erase`, with its plan and code.",
+		Discussion: "With several plans, the longest keep wins. A held artefact (card holds) is marked held. then: archive is applied by --archive (reversible: `artefact unarchive`); then: destroy is never applied here, it goes through `artefact erase`, with its plan and code.",
 		Params: []spec.Param{
 			{Name: "plan", Kind: spec.String, Help: "Review this plan only."},
 			{Name: "due-before", Kind: spec.String, Help: "Count as due what ends before this date (YYYY-MM-DD). Defaults to today."},
+			{Name: "archive", Kind: spec.Bool, Help: "Archive the due artefacts whose disposition is archive (not held)."},
 		},
-		Examples: []string{"artefact review", "artefact review --plan household --due-before 2027-01-01"},
-		Effects:  []string{"Reads only."},
+		Examples: []string{"artefact review", "artefact review --plan household --due-before 2027-01-01", "artefact review --archive"},
+		Effects:  []string{"Reads only; with --archive, marks the due artefacts of disposition archive as archived."},
 		Run: func(ctx *spec.Context) (any, error) {
 			before := time.Now()
 			if d := ctx.Str("due-before"); d != "" {
@@ -147,7 +148,13 @@ func init() {
 				}
 				before = t
 			}
-			return run(ctx, func(s *store.Store) (any, error) { return s.Review(ctx.Str("plan"), before) })
+			return run(ctx, func(s *store.Store) (any, error) {
+				due, err := s.Review(ctx.Str("plan"), before)
+				if err != nil || !ctx.Bool("archive") {
+					return due, err
+				}
+				return s.ApplyArchive(due)
+			})
 		},
 	})
 }
@@ -178,4 +185,39 @@ func who(ctx *spec.Context) string {
 		return u.Username
 	}
 	return "unknown"
+}
+
+func init() {
+	for _, v := range []struct {
+		name, summary string
+		archived      bool
+	}{
+		{"archive", "Archive artefacts: kept, replicated and reachable by id and view path, but hidden from lists and view listings.", true},
+		{"unarchive", "Make archived artefacts active again.", false},
+	} {
+		v := v
+		spec.Register(&spec.Action{
+			Category: "artefacts", Name: v.name, Right: "write",
+			Summary: v.summary,
+			Params: []spec.Param{
+				{Name: "id", Kind: spec.StringList, Positional: true, Required: true, Help: "Artefact ids or URIs."},
+				{Name: "reason", Kind: spec.String, Help: "Why, kept in the event."},
+			},
+			Examples: []string{"artefact " + v.name + " 01K9B3T0Z6Q8M2C4R7V1X5N9PA"},
+			Effects:  []string{"Sets or clears archived in the card and appends an " + v.name + " event. Nothing is deleted."},
+			Run: func(ctx *spec.Context) (any, error) {
+				return run(ctx, func(s *store.Store) (any, error) {
+					var out []map[string]any
+					for _, id := range ctx.List("id") {
+						c, err := s.Archive(id, v.archived, ctx.Str("reason"))
+						if err != nil {
+							return nil, err
+						}
+						out = append(out, map[string]any{"uri": store.URI(c.Sphere, c.ID), "archived": c.Archived})
+					}
+					return out, nil
+				})
+			},
+		})
+	}
 }

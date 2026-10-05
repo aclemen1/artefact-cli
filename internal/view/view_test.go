@@ -79,3 +79,22 @@ func TestTree(t *testing.T) {
 		t.Error("the view must refuse writes")
 	}
 }
+
+func TestArchivedHiddenButReachable(t *testing.T) {
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}, DefaultSphere: "perso"}
+	st, _ := store.Open(cfg, nil, "test")
+	defer st.Close()
+	st.Init()
+	a, _ := st.Put(strings.NewReader("x"), store.PutOptions{Filename: "a.pdf"})
+	if _, err := st.Archive(a.ID, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	tr := New(st, "perso")
+	l, _ := tr.ReadDir("a")
+	if len(l) != 0 {
+		t.Errorf("an archived artefact is listed: %v", l)
+	}
+	if _, err := tr.Stat("a/" + a.ID + ".pdf"); err != nil {
+		t.Errorf("an archived artefact must stay reachable by its path: %v", err)
+	}
+}

@@ -170,6 +170,9 @@ func (t *Tree) ReadDir(p string) ([]*Info, error) {
 		out := make([]*Info, 0, 2*len(order))
 		for _, id := range order {
 			r := rows[id]
+			if r.Archived != "" {
+				continue // reachable by its path, not listed
+			}
 			out = append(out, &Info{name: id + r.Ext, size: r.Size, mod: parseTime(r.Updated, t.started)}, t.dir(id))
 		}
 		return out, nil

@@ -202,11 +202,21 @@ func (c *Client) PutFile(ctx context.Context, path string, o PutOptions) (*PutRe
 	return c.Put(ctx, f, o)
 }
 
-// Open streams the payload of id (version "" for the current one).
+// Open streams the payload of id, a URI or a bare ULID (version "" for the
+// current one). A bare ULID costs one stat call to find its sphere.
 func (c *Client) Open(ctx context.Context, id, version string, reveal bool) (io.ReadCloser, error) {
 	sphere, ulid, ok := splitURI(id)
 	if !ok {
-		return nil, &Error{Kind: "user_error", Message: "Open takes an artefact URI artefact://<sphere>/<id>, got " + id}
+		st, missing, err := c.Stat(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if len(missing) > 0 || len(st) == 0 {
+			return nil, &Error{Kind: "not_found", Message: "no artefact " + id}
+		}
+		if sphere, ulid, ok = splitURI(st[0].URI); !ok {
+			return nil, &Error{Kind: "error", Message: "unexpected URI " + st[0].URI}
+		}
 	}
 	u := c.base + "/" + sphere + "/a/" + ulid
 	if version != "" {

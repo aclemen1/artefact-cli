@@ -25,7 +25,7 @@ func drive(t *testing.T, m *model, cmd tea.Cmd) {
 		for _, c := range msg {
 			drive(t, m, c)
 		}
-	case nil:
+	case nil, tickMsg:
 	default:
 		if _, isBG := msg.(tea.BackgroundColorMsg); isBG {
 			return
@@ -95,9 +95,7 @@ func TestTUI(t *testing.T) {
 	if s := screen(m); strings.Contains(s, "Ordonnance") || !strings.Contains(s, "Facture") {
 		t.Fatalf("text filter:\n%s", s)
 	}
-	press(t, m, "/")
-	press(t, m, "esc")
-	m.filter = ""
+	press(t, m, "r") // back to the whole list
 
 	// Detail of the perso artefact, then seal it.
 	for i, it := range m.visible() {

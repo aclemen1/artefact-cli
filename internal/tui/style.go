@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"image/color"
+	"regexp"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -30,6 +31,7 @@ var (
 	cMuted   = adaptive{Light: "#8A8A8A", Dark: "#6E6E6E"}
 	cText    = adaptive{Light: "#1A1A1A", Dark: "#E6E6E6"}
 	cSel     = adaptive{Light: "#D4CCFF", Dark: "#4B3F99"}
+	cSelBg   = adaptive{Light: "#ECE9FF", Dark: "#2D2A4A"}
 	cWorking = adaptive{Light: "#B7791F", Dark: "#F2C14E"}
 	cReady   = adaptive{Light: "#2F855A", Dark: "#68D391"}
 	cStopped = adaptive{Light: "#C53030", Dark: "#FC8181"}
@@ -37,16 +39,34 @@ var (
 	cPro     = adaptive{Light: "#C05621", Dark: "#F6AD55"}
 	cOther   = adaptive{Light: "#2C7A7B", Dark: "#4FD1C5"}
 
-	sTitle  = lipgloss.NewStyle().Bold(true).Foreground(cAccent)
-	sMuted  = lipgloss.NewStyle().Foreground(cMuted)
-	sText   = lipgloss.NewStyle().Foreground(cText)
-	sBold   = lipgloss.NewStyle().Bold(true).Foreground(cText)
-	sErr    = lipgloss.NewStyle().Bold(true).Foreground(cStopped)
-	sOK     = lipgloss.NewStyle().Foreground(cReady)
-	sWarn   = lipgloss.NewStyle().Bold(true).Foreground(cWorking)
-	sKey    = lipgloss.NewStyle().Bold(true).Foreground(cAccent)
-	sSelRow = lipgloss.NewStyle().Background(cSel)
+	sTitle   = lipgloss.NewStyle().Bold(true).Foreground(cAccent)
+	sMuted   = lipgloss.NewStyle().Foreground(cMuted)
+	sText    = lipgloss.NewStyle().Foreground(cText)
+	sBold    = lipgloss.NewStyle().Bold(true).Foreground(cText)
+	sErr     = lipgloss.NewStyle().Bold(true).Foreground(cStopped)
+	sOK      = lipgloss.NewStyle().Foreground(cReady)
+	sWarn    = lipgloss.NewStyle().Bold(true).Foreground(cWorking)
+	sKey     = lipgloss.NewStyle().Bold(true).Foreground(cAccent)
+	sSection = lipgloss.NewStyle().Bold(true).Foreground(cAccent).Underline(true)
 )
+
+// sgrReset matches the resets lipgloss puts after each styled span.
+var sgrReset = regexp.MustCompile(`\x1b\[0?m`)
+
+// selectLine puts the selected row on a strong background, with a bar in the
+// accent colour, as office's TUI does, and keeps every colour of the row:
+// the background is set again after each reset.
+func selectLine(line string, w int) string {
+	probe := lipgloss.NewStyle().Background(cSel).Render("|")
+	bg, _, _ := strings.Cut(probe, "|")
+	rest := ansi.Cut(line, 1, w)
+	body := bg + sgrReset.ReplaceAllStringFunc(rest, func(r string) string { return r + bg })
+	if d := w - 1 - ansi.StringWidth(rest); d > 0 {
+		body += strings.Repeat(" ", d)
+	}
+	bar := lipgloss.NewStyle().Foreground(cAccent).Background(cSel).Bold(true).Render("▌")
+	return bar + body + "\x1b[m"
+}
 
 func sphereColor(s string) color.Color {
 	switch s {

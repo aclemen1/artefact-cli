@@ -38,7 +38,7 @@ type Node struct {
 type Retention struct {
 	Keep string `yaml:"keep" json:"keep"`                     // 10y, 6m, 30d, or forever
 	From string `yaml:"from,omitempty" json:"from,omitempty"` // date (of the content, default) or deposit
-	Then string `yaml:"then" json:"then"`                     // keep, review or destroy
+	Then string `yaml:"then" json:"then"`                     // keep, archive, review or destroy
 }
 
 // Rule places an artefact without a decider when every field it sets matches.
@@ -86,8 +86,8 @@ func (p *Plan) Validate() error {
 			if r.From != "" && r.From != "date" && r.From != "deposit" {
 				return fmt.Errorf("plan %s, node %s: retention.from is date or deposit, got %q", p.ID, n.Notation, r.From)
 			}
-			if r.Then != "keep" && r.Then != "review" && r.Then != "destroy" {
-				return fmt.Errorf("plan %s, node %s: retention.then is keep, review or destroy, got %q", p.ID, n.Notation, r.Then)
+			if r.Then != "keep" && r.Then != "archive" && r.Then != "review" && r.Then != "destroy" {
+				return fmt.Errorf("plan %s, node %s: retention.then is keep, archive, review or destroy, got %q", p.ID, n.Notation, r.Then)
 			}
 		}
 		for _, rl := range n.Rules {

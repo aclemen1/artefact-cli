@@ -12,6 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/aclemen1/artefact-cli/internal/classify"
+	"github.com/aclemen1/artefact-cli/internal/index"
 )
 
 // Plans is where the classification plans live.
@@ -225,9 +226,10 @@ type Due struct {
 	Label  string `json:"label"`
 	RuleAt string `json:"rule_at"` // node that carries the rule (self or ancestor)
 	Keep   string `json:"keep"`
-	Then   string `json:"then"` // review or destroy
+	Then   string `json:"then"` // archive, review or destroy
 	Due    string `json:"due"`
 	Held   bool   `json:"held,omitempty"` // a hold suspends the disposal
+	Done   string `json:"done,omitempty"` // archived, when review archived it
 }
 
 // Review lists the artefacts whose retention ends before `before`. With
@@ -293,6 +295,9 @@ func (s *Store) Review(planID string, before time.Time) ([]Due, error) {
 		if !cd.end || cd.due.After(before) {
 			continue
 		}
+		if row, err := s.rowOf(cd.d.URI); err == nil && row.Archived != "" && cd.d.Then == "archive" {
+			continue // already done
+		}
 		if r, err := s.Resolve(cd.d.URI); err == nil {
 			if c, err := readCard(r.Dir); err == nil && len(c.Holds) > 0 {
 				cd.d.Held = true
@@ -321,4 +326,27 @@ func sortDue(l []Due) {
 			}
 		}
 	}
+}
+
+func (s *Store) rowOf(uri string) (index.Row, error) {
+	r, err := s.Resolve(uri)
+	if err != nil {
+		return index.Row{}, err
+	}
+	return r.Row, nil
+}
+
+// ApplyArchive archives the due artefacts whose disposition is archive,
+// unless a hold suspends it.
+func (s *Store) ApplyArchive(due []Due) ([]Due, error) {
+	for i, d := range due {
+		if d.Then != "archive" || d.Held {
+			continue
+		}
+		if _, err := s.Archive(d.URI, true, "retention "+d.Plan+":"+d.RuleAt+" ended "+d.Due); err != nil {
+			return due, err
+		}
+		due[i].Done = "archived"
+	}
+	return due, nil
 }

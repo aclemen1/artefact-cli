@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/aclemen1/artefact-cli/internal/backend"
@@ -183,7 +185,13 @@ func (s *Store) syncPrefix(ctx context.Context, sphere string, b *backend.Backen
 		have[r.Path] = r
 	}
 	seen := map[string]bool{}
-	recipient := ""
+	type job struct {
+		f      localFile
+		sum    string
+		enc    bool
+		remote string
+	}
+	var jobs []job
 	for _, f := range locals {
 		seen[f.rel] = true
 		sum, err := s.localHash(x, f)
@@ -204,21 +212,35 @@ func (s *Store) syncPrefix(ctx context.Context, sphere string, b *backend.Backen
 			st.Bytes += f.size
 			continue
 		}
-		var body io.Reader
-		file, err := os.Open(f.abs)
-		if err != nil {
-			fail(err)
-			continue
-		}
-		body = file
-		if enc {
-			if recipient == "" {
+		jobs = append(jobs, job{f, sum, enc, remote})
+	}
+	recipient := ""
+	if len(jobs) > 0 {
+		for _, j := range jobs {
+			if j.enc {
 				if recipient, err = s.recipient(sphere); err != nil {
-					file.Close()
 					fail(err)
-					continue
+					return st
 				}
+				break
 			}
+		}
+	}
+	prog := s.progress(sphere, b.Name, prefix, len(jobs))
+	defer prog.finish()
+	var mu sync.Mutex
+	upload := func(j job) {
+		var body io.Reader
+		file, err := os.Open(j.f.abs)
+		if err != nil {
+			mu.Lock()
+			fail(err)
+			mu.Unlock()
+			return
+		}
+		defer file.Close()
+		body = file
+		if j.enc {
 			var buf bytes.Buffer
 			w, err := keys.Encrypt(&buf, recipient)
 			if err == nil {
@@ -228,31 +250,54 @@ func (s *Store) syncPrefix(ctx context.Context, sphere string, b *backend.Backen
 				err = w.Close()
 			}
 			if err != nil {
-				file.Close()
+				mu.Lock()
 				fail(err)
-				continue
+				mu.Unlock()
+				return
 			}
 			body = &buf
 		}
 		h := sha256.New()
 		cnt := &counter{}
-		err = b.Put(ctx, remote, io.TeeReader(io.TeeReader(body, h), cnt), time.Unix(0, f.mtime))
-		file.Close()
-		if err != nil {
+		if err := b.Put(ctx, j.remote, io.TeeReader(io.TeeReader(body, h), cnt), time.Unix(0, j.f.mtime)); err != nil {
+			mu.Lock()
 			fail(err)
-			continue
+			mu.Unlock()
+			return
 		}
-		if old, ok := have[f.rel]; ok && old.Remote != remote {
+		if old, ok := have[j.f.rel]; ok && old.Remote != j.remote {
 			_ = b.Delete(ctx, old.Remote)
 		}
-		rec := index.RemoteFile{Backend: b.Name, Path: f.rel, Remote: remote, SHA256: sum, RSHA256: hex.EncodeToString(h.Sum(nil)), Size: cnt.n, Synced: s.now()}
-		if err := x.PutRemote(rec); err != nil {
+		rec := index.RemoteFile{Backend: b.Name, Path: j.f.rel, Remote: j.remote, SHA256: j.sum, RSHA256: hex.EncodeToString(h.Sum(nil)), Size: cnt.n, Synced: s.now()}
+		err = x.PutRemote(rec)
+		mu.Lock()
+		defer mu.Unlock()
+		if err != nil {
 			fail(err)
-			continue
+			return
 		}
 		st.Uploaded++
 		st.Bytes += cnt.n
+		prog.step(cnt.n)
 	}
+	work := make(chan job)
+	var wg sync.WaitGroup
+	for range min(s.transfers(sphere), max(1, len(jobs))) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range work {
+				if ctx.Err() == nil {
+					upload(j)
+				}
+			}
+		}()
+	}
+	for _, j := range jobs {
+		work <- j
+	}
+	close(work)
+	wg.Wait()
 	for _, r := range recs {
 		if seen[r.Path] {
 			continue
@@ -297,7 +342,24 @@ func (s *Store) recipient(sphere string) (string, error) {
 // SphereSync is the result of a sync of one sphere.
 type SphereSync struct {
 	Sphere   string      `json:"sphere"`
+	Busy     bool        `json:"busy,omitempty"` // another sync of the sphere was running
 	Backends []SyncStats `json:"backends"`
+}
+
+// trySyncLock takes the sphere's sync lock without waiting.
+func (s *Store) trySyncLock(sphere string) (func(), bool, error) {
+	if err := os.MkdirAll(s.state(), 0o755); err != nil {
+		return nil, false, err
+	}
+	f, err := os.OpenFile(filepath.Join(s.state(), "sync-"+sphere), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		return nil, false, nil
+	}
+	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); f.Close() }, true, nil
 }
 
 // Sync brings every backend of the spheres up to date; dry counts only.
@@ -317,9 +379,25 @@ func (s *Store) Sync(ctx context.Context, sphere string, dry bool) ([]SphereSync
 			return nil, err
 		}
 		res := SphereSync{Sphere: sp, Backends: []SyncStats{}}
+		if len(bs) == 0 {
+			out = append(out, res)
+			continue
+		}
+		// Two syncs of a sphere at once would upload the same files twice,
+		// and Drive keeps both: a second sync gives way.
+		release, ok, err := s.trySyncLock(sp)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			res.Busy = true
+			out = append(out, res)
+			continue
+		}
 		for _, b := range bs {
 			res.Backends = append(res.Backends, s.syncPrefix(ctx, sp, b, "", dry))
 		}
+		release()
 		out = append(out, res)
 	}
 	return out, nil
@@ -589,4 +667,139 @@ func (s *Store) BackendFiles(ctx context.Context, sphere, name string) ([]string
 		}
 	}
 	return nil, fmt.Errorf("backend %q is not a backend of sphere %q", name, sphere)
+}
+
+// transfers is how many files a sync sends at once.
+func (s *Store) transfers(sphere string) int {
+	if n := s.Cfg.ReplicationOf(sphere).Transfers; n > 0 {
+		return n
+	}
+	return 8
+}
+
+// SyncProgress is what a running sync of a sphere publishes, for the TUI
+// and `artefact sync --status`.
+type SyncProgress struct {
+	Sphere  string `json:"sphere"`
+	Backend string `json:"backend"`
+	Running bool   `json:"running"`
+	Total   int    `json:"total"` // files to send
+	Done    int    `json:"done"`
+	Bytes   int64  `json:"bytes"`
+	Started string `json:"started"`
+	Updated string `json:"updated"`
+}
+
+type progressWriter struct {
+	s    *Store
+	path string
+	mu   sync.Mutex
+	p    SyncProgress
+	last time.Time
+}
+
+// progress tracks a whole-sphere sync; an object sync (prefix) is too short
+// to publish.
+func (s *Store) progress(sphere, backend, prefix string, total int) *progressWriter {
+	w := &progressWriter{s: s, path: filepath.Join(s.state(), "sync-"+sphere+".json")}
+	if prefix != "" || total == 0 {
+		w.path = ""
+		return w
+	}
+	w.p = SyncProgress{Sphere: sphere, Backend: backend, Running: true, Total: total, Started: s.now()}
+	w.write()
+	return w
+}
+
+func (w *progressWriter) step(n int64) {
+	if w.path == "" {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.p.Done++
+	w.p.Bytes += n
+	if time.Since(w.last) > 2*time.Second {
+		w.write()
+	}
+}
+
+func (w *progressWriter) finish() {
+	if w.path == "" {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.p.Running = false
+	w.write()
+}
+
+func (w *progressWriter) write() {
+	w.p.Updated = w.s.now()
+	w.last = time.Now()
+	b, _ := json.Marshal(w.p)
+	tmp := w.path + ".tmp"
+	if os.WriteFile(tmp, b, 0o644) == nil {
+		_ = os.Rename(tmp, w.path)
+	}
+}
+
+// Progress reads the last sync progress of each granted sphere.
+func (s *Store) Progress() []SyncProgress {
+	var out []SyncProgress
+	for _, sp := range s.Spheres {
+		b, err := os.ReadFile(filepath.Join(s.state(), "sync-"+sp+".json"))
+		if err != nil {
+			continue
+		}
+		var p SyncProgress
+		if json.Unmarshal(b, &p) == nil {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// CopyState sums up an artefact's copies: complete on every backend of its
+// sphere, partial, none, or no backend at all.
+type CopyState string
+
+const (
+	CopiesComplete  CopyState = "complete"
+	CopiesPartial   CopyState = "partial"
+	CopiesNone      CopyState = "none"
+	CopiesNoBackend CopyState = "no-backend"
+)
+
+// CopyStates gives the copy state of the listed artefacts.
+func (s *Store) CopyStates(items []ListItem) map[string]CopyState {
+	out := map[string]CopyState{}
+	for _, it := range items {
+		if len(s.Cfg.ReplicationOf(it.Sphere).Backends) == 0 {
+			out[it.ID] = CopiesNoBackend
+			continue
+		}
+		cs, err := s.copiesOf(it.Sphere, it.Path)
+		if err != nil {
+			continue
+		}
+		complete, some := true, false
+		for _, c := range cs {
+			if !c.Complete {
+				complete = false
+			}
+			if c.Files > 0 {
+				some = true
+			}
+		}
+		switch {
+		case complete:
+			out[it.ID] = CopiesComplete
+		case some:
+			out[it.ID] = CopiesPartial
+		default:
+			out[it.ID] = CopiesNone
+		}
+	}
+	return out
 }

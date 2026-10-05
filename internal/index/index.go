@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	_ "modernc.org/sqlite"
 )
@@ -26,7 +27,8 @@ CREATE TABLE IF NOT EXISTS artefacts (
   updated   TEXT NOT NULL,
   path      TEXT NOT NULL,
   keyed     TEXT NOT NULL DEFAULT '',
-  ext       TEXT NOT NULL DEFAULT ''
+  ext       TEXT NOT NULL DEFAULT '',
+  archived  TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS artefacts_digest ON artefacts(digest);
 CREATE TABLE IF NOT EXISTS holders (
@@ -82,9 +84,10 @@ type Row struct {
 	Sealed    bool   `json:"sealed"`
 	Deposited string `json:"deposited"`
 	Updated   string `json:"updated"`
-	Path      string `json:"-"`   // object root, relative to the sphere's storage root
-	Keyed     string `json:"-"`   // keyed digest of a sealed payload's plaintext
-	Ext       string `json:"ext"` // payload extension, fixed at deposit
+	Path      string `json:"-"`                  // object root, relative to the sphere's storage root
+	Keyed     string `json:"-"`                  // keyed digest of a sealed payload's plaintext
+	Ext       string `json:"ext"`                // payload extension, fixed at deposit
+	Archived  string `json:"archived,omitempty"` // when the artefact was archived
 }
 
 type Holder struct {
@@ -107,7 +110,7 @@ func Open(path string) (*Index, error) {
 		return nil, fmt.Errorf("index %s: %w", path, err)
 	}
 	// Indexes made by earlier versions lack the later columns.
-	for _, col := range []string{"keyed", "ext"} {
+	for _, col := range []string{"keyed", "ext", "archived"} {
 		var n int
 		_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('artefacts') WHERE name = ?`, col).Scan(&n)
 		if n == 0 {
@@ -116,6 +119,10 @@ func Open(path string) (*Index, error) {
 				return nil, fmt.Errorf("index %s: %w", path, err)
 			}
 		}
+	}
+	if _, err := db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(id UNINDEXED, title, filename, meta, body, tokenize='unicode61 remove_diacritics 2')`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("index %s: full-text search: %w", path, err)
 	}
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS artefacts_keyed ON artefacts(keyed)`); err != nil {
 		db.Close()
@@ -128,7 +135,7 @@ func (x *Index) Close() error { return x.db.Close() }
 
 // Reset empties every table, before a rebuild.
 func (x *Index) Reset() error {
-	_, err := x.db.Exec(`DELETE FROM artefacts; DELETE FROM holders; DELETE FROM keys; DELETE FROM classes;`)
+	_, err := x.db.Exec(`DELETE FROM artefacts; DELETE FROM holders; DELETE FROM keys; DELETE FROM classes; DELETE FROM search;`)
 	return err
 }
 
@@ -139,12 +146,12 @@ func (x *Index) Put(r Row, holders []Holder) error {
 		return err
 	}
 	defer tx.Rollback()
-	_, err = tx.Exec(`INSERT INTO artefacts (id, digest, title, filename, mime, size, date, version, sealed, deposited, updated, path, keyed, ext)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	_, err = tx.Exec(`INSERT INTO artefacts (id, digest, title, filename, mime, size, date, version, sealed, deposited, updated, path, keyed, ext, archived)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET digest=excluded.digest, title=excluded.title, filename=excluded.filename,
 		mime=excluded.mime, size=excluded.size, date=excluded.date, version=excluded.version, sealed=excluded.sealed,
-		deposited=excluded.deposited, updated=excluded.updated, path=excluded.path, keyed=excluded.keyed, ext=excluded.ext`,
-		r.ID, r.Digest, r.Title, r.Filename, r.Mime, r.Size, r.Date, r.Version, r.Sealed, r.Deposited, r.Updated, r.Path, r.Keyed, r.Ext)
+		deposited=excluded.deposited, updated=excluded.updated, path=excluded.path, keyed=excluded.keyed, ext=excluded.ext, archived=excluded.archived`,
+		r.ID, r.Digest, r.Title, r.Filename, r.Mime, r.Size, r.Date, r.Version, r.Sealed, r.Deposited, r.Updated, r.Path, r.Keyed, r.Ext, r.Archived)
 	if err != nil {
 		return err
 	}
@@ -166,7 +173,7 @@ func (x *Index) Delete(id string) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, q := range []string{`DELETE FROM artefacts WHERE id = ?`, `DELETE FROM holders WHERE id = ?`, `DELETE FROM keys WHERE id = ?`, `DELETE FROM classes WHERE id = ?`} {
+	for _, q := range []string{`DELETE FROM artefacts WHERE id = ?`, `DELETE FROM holders WHERE id = ?`, `DELETE FROM keys WHERE id = ?`, `DELETE FROM classes WHERE id = ?`, `DELETE FROM search WHERE id = ?`} {
 		if _, err := tx.Exec(q, id); err != nil {
 			return err
 		}
@@ -188,11 +195,11 @@ func (x *Index) Key(key string) (id, digest string, err error) {
 	return
 }
 
-const cols = `id, digest, title, filename, mime, size, date, version, sealed, deposited, updated, path, keyed, ext`
+const cols = `id, digest, title, filename, mime, size, date, version, sealed, deposited, updated, path, keyed, ext, archived`
 
 func scan(s interface{ Scan(...any) error }) (Row, error) {
 	var r Row
-	err := s.Scan(&r.ID, &r.Digest, &r.Title, &r.Filename, &r.Mime, &r.Size, &r.Date, &r.Version, &r.Sealed, &r.Deposited, &r.Updated, &r.Path, &r.Keyed, &r.Ext)
+	err := s.Scan(&r.ID, &r.Digest, &r.Title, &r.Filename, &r.Mime, &r.Size, &r.Date, &r.Version, &r.Sealed, &r.Deposited, &r.Updated, &r.Path, &r.Keyed, &r.Ext, &r.Archived)
 	return r, err
 }
 
@@ -243,6 +250,7 @@ type Filter struct {
 	HeldBy   string // tool, or tool:ref
 	Class    string // plan, or plan:notation (descendants included)
 	Pending  bool   // classified but waiting for a human (in Class's plan when given)
+	State    string // "" every artefact, "active" not archived, "archived" archived only
 	Orphaned bool
 	Since    string // deposited on or after this date
 	Limit    int
@@ -280,6 +288,12 @@ func (x *Index) List(f Filter) ([]Row, error) {
 		} else {
 			where = append(where, `id IN (SELECT id FROM classes WHERE pending = 1)`)
 		}
+	}
+	switch f.State {
+	case "active":
+		where = append(where, `archived = ''`)
+	case "archived":
+		where = append(where, `archived != ''`)
 	}
 	if f.Since != "" {
 		where = append(where, `deposited >= ?`)
@@ -450,4 +464,69 @@ func (x *Index) Classified(plan string) (map[string]ClassRow, error) {
 		out[id] = c
 	}
 	return out, rows.Err()
+}
+
+// PutSearch replaces the searchable text of an artefact.
+func (x *Index) PutSearch(id, title, filename, meta, body string) error {
+	tx, err := x.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM search WHERE id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO search (id, title, filename, meta, body) VALUES (?,?,?,?,?)`, id, title, filename, meta, body); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// Hit is one search result.
+type Hit struct {
+	ID      string
+	Score   float64 // bm25: lower is better
+	Snippet string
+}
+
+// Search finds artefacts whose words start with every word of q, accents
+// and case ignored; title and file name weigh more than the content.
+func (x *Index) Search(q string, limit int) ([]Hit, error) {
+	match := ftsQuery(q)
+	if match == "" {
+		return []Hit{}, nil
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := x.db.Query(`SELECT id, bm25(search, 0, 10, 5, 2, 1) AS score,
+		snippet(search, -1, '«', '»', '…', 12) FROM search WHERE search MATCH ? ORDER BY score LIMIT ?`, match, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Hit{}
+	for rows.Next() {
+		var h Hit
+		if err := rows.Scan(&h.ID, &h.Score, &h.Snippet); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+// ftsQuery turns free words into an FTS5 query of quoted prefixes.
+func ftsQuery(q string) string {
+	var parts []string
+	for _, w := range strings.FieldsFunc(q, func(r rune) bool {
+		return !(r == '-' || r == '_' || r == '.' || r == '@' || unicode.IsLetter(r) || unicode.IsDigit(r))
+	}) {
+		w = strings.Trim(w, "-_.@")
+		if w == "" {
+			continue
+		}
+		parts = append(parts, `"`+strings.ReplaceAll(w, `"`, `""`)+`"*`)
+	}
+	return strings.Join(parts, " AND ")
 }

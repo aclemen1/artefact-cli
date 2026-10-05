@@ -159,3 +159,17 @@ func TestFsckFindsABadCopy(t *testing.T) {
 		t.Errorf("list %d", len(held))
 	}
 }
+
+func TestSyncPublishesProgress(t *testing.T) {
+	s, _ := replicated(t)
+	for i := 0; i < 3; i++ {
+		put(t, s, strings.Repeat("x", i+1), PutOptions{Filename: "f.txt"})
+	}
+	if _, err := s.Sync(context.Background(), "perso", false); err != nil {
+		t.Fatal(err)
+	}
+	p := s.Progress()
+	if len(p) != 1 || p[0].Running || p[0].Done == 0 || p[0].Done != p[0].Total {
+		t.Errorf("progress %+v", p)
+	}
+}

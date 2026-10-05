@@ -200,3 +200,78 @@ func TestReview(t *testing.T) {
 		t.Errorf("SKOS:\n%s", ttl)
 	}
 }
+
+func TestArchive(t *testing.T) {
+	s := newStore(t)
+	plan := strings.Replace(planYAML, "retention: { keep: 5y, then: destroy }", "retention: { keep: 5y, then: archive }", 1)
+	if _, err := s.Plans().Save([]byte(plan), false); err != nil {
+		t.Fatal(err)
+	}
+	old := put(t, s, "old claim", PutOptions{Filename: "a.txt", Date: "2015-01-10"})
+	put(t, s, "current", PutOptions{Filename: "b.txt"})
+	s.SetClass(old.ID, "household", "3.2", "alain")
+	due, _ := s.Review("", time.Now())
+	if len(due) != 1 || due[0].Then != "archive" {
+		t.Fatalf("due %+v", due)
+	}
+	done, err := s.ApplyArchive(due)
+	if err != nil || done[0].Done != "archived" {
+		t.Fatalf("apply %+v %v", done, err)
+	}
+	if l, _ := s.List("perso", index.Filter{State: "active"}); len(l) != 1 {
+		t.Errorf("active: %d", len(l))
+	}
+	if l, _ := s.List("perso", index.Filter{State: "archived"}); len(l) != 1 || l[0].ID != old.ID {
+		t.Errorf("archived: %v", l)
+	}
+	if again, _ := s.Review("", time.Now()); len(again) != 0 {
+		t.Errorf("an archived artefact is not due again: %+v", again)
+	}
+	if _, err := s.Resolve(old.ID); err != nil {
+		t.Error("an archived artefact stays reachable")
+	}
+	if _, err := s.Archive(old.ID, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ := s.List("perso", index.Filter{State: "active"}); len(l) != 2 {
+		t.Errorf("after unarchive: %d", len(l))
+	}
+}
+
+func TestSearch(t *testing.T) {
+	s := sealedStore(t)
+	a := put(t, s, "Assura SA. Décompte de prestations, franchise 300 CHF, quote-part 10 %.", PutOptions{Filename: "decompte-assura.txt", Title: "Décompte Assura septembre"})
+	put(t, s, "Ordonnance du Dr Rochat: Plaquenil 200 mg", PutOptions{Filename: "ordonnance.txt", Sphere: "pro"})
+	sealed := put(t, s, "SECRETWORD inside", PutOptions{Filename: "codes.txt", Title: "Codes de secours", Seal: true})
+	s.EditCard(a.ID, []string{"dc.creator=Assura SA"}, "")
+
+	hits, err := s.Search("decompte", "", 10, "all")
+	if err != nil || len(hits) != 1 || hits[0].ID != a.ID {
+		t.Fatalf("accent-free title: %v %v", hits, err)
+	}
+	if hits, _ := s.Search("franch quote", "", 10, "all"); len(hits) != 1 {
+		t.Errorf("prefixes in the content: %v", hits)
+	}
+	if hits, _ := s.Search("plaquenil", "perso", 10, "all"); len(hits) != 0 {
+		t.Errorf("a pro artefact found in perso: %v", hits)
+	}
+	if hits, _ := s.Search("plaquenil", "", 10, "all"); len(hits) != 1 || hits[0].Sphere != "pro" {
+		t.Errorf("across spheres: %v", hits)
+	}
+	if hits, _ := s.Search("secretword", "", 10, "all"); len(hits) != 0 {
+		t.Error("the content of a sealed artefact is searchable")
+	}
+	if hits, _ := s.Search("secours", "", 10, "all"); len(hits) != 1 || hits[0].ID != sealed.ID {
+		t.Errorf("a sealed artefact is found by its card: %v", hits)
+	}
+	s.Archive(a.ID, true, "")
+	if hits, _ := s.Search("assura", "", 10, "active"); len(hits) != 0 {
+		t.Errorf("archived in active search: %v", hits)
+	}
+	if _, err := s.Reindex(""); err != nil {
+		t.Fatal(err)
+	}
+	if hits, _ := s.Search("assura", "", 10, "all"); len(hits) != 1 || !strings.Contains(hits[0].Snippet, "«") {
+		t.Errorf("after reindex: %v", hits)
+	}
+}

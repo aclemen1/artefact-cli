@@ -56,7 +56,8 @@ type Replication struct {
 	NumCopies int      `yaml:"numcopies" json:"numcopies"`
 	MinCopies int      `yaml:"mincopies" json:"mincopies"`
 	Backends  []string `yaml:"backends" json:"backends"`
-	Every     string   `yaml:"every,omitempty" json:"every,omitempty"` // how often serve syncs, default 15m
+	Every     string   `yaml:"every,omitempty" json:"every,omitempty"`         // how often serve syncs, default 15m
+	Transfers int      `yaml:"transfers,omitempty" json:"transfers,omitempty"` // files sent at once, default 8
 }
 
 // ReplicationOf returns the policy of sphere, with defaults.

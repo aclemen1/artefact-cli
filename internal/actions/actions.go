@@ -213,6 +213,7 @@ func init() {
 			{Name: "orphaned", Kind: spec.Bool, Help: "Keep the artefacts that no one holds."},
 			{Name: "class", Kind: spec.String, Help: "Keep the artefacts placed in plan, or in plan:notation and below."},
 			{Name: "pending", Kind: spec.Bool, Help: "Keep the artefacts whose classification waits for a human (in --class's plan when given)."},
+			{Name: "state", Kind: spec.String, Default: "active", Enum: []string{"active", "archived", "all"}, Help: "active hides the archived artefacts; archived shows them only; all shows both."},
 			{Name: "since", Kind: spec.String, Help: "Keep the artefacts deposited on or after this date (YYYY-MM-DD)."},
 			{Name: "limit", Kind: spec.String, Default: "100", Help: "Maximum number of artefacts; 0 for all.", Aliases: []string{"n"}},
 		},
@@ -224,7 +225,7 @@ func init() {
 				return nil, spec.UserError("--limit takes a number, got %q. Example: artefact ls --limit 20", ctx.Str("limit"))
 			}
 			return run(ctx, func(s *store.Store) (any, error) {
-				return s.List(ctx.Str("sphere"), index.Filter{HeldBy: ctx.Str("held-by"), Class: ctx.Str("class"), Pending: ctx.Bool("pending"), Orphaned: ctx.Bool("orphaned"), Since: ctx.Str("since"), Limit: limit})
+				return s.List(ctx.Str("sphere"), index.Filter{HeldBy: ctx.Str("held-by"), Class: ctx.Str("class"), Pending: ctx.Bool("pending"), State: stateFilter(ctx.Str("state")), Orphaned: ctx.Bool("orphaned"), Since: ctx.Str("since"), Limit: limit})
 			})
 		},
 		Text: func(w io.Writer, r any) {
@@ -465,12 +466,20 @@ func init() {
 	})
 	spec.Register(&spec.Action{
 		Category: "ops", Name: "reindex",
-		Summary:  "Rebuild the indexes from the store: cards, inventories and event logs.",
-		Params:   []spec.Param{{Name: "sphere", Kind: spec.String, Help: "Rebuild this sphere only."}},
-		Examples: []string{"artefact reindex", "artefact reindex --sphere perso"},
+		Summary: "Rebuild the indexes from the store: cards, inventories and event logs.",
+		Params: []spec.Param{
+			{Name: "sphere", Kind: spec.String, Help: "Rebuild this sphere only."},
+			{Name: "search-only", Kind: spec.Bool, Help: "Rebuild only the full-text search index; the store stays usable meanwhile."},
+		},
+		Examples: []string{"artefact reindex", "artefact reindex --sphere perso", "artefact reindex --search-only"},
 		Effects:  []string{"Replaces the content of the sphere's index; the store is not changed."},
 		Run: func(ctx *spec.Context) (any, error) {
-			return run(ctx, func(s *store.Store) (any, error) { return s.Reindex(ctx.Str("sphere")) })
+			return run(ctx, func(s *store.Store) (any, error) {
+				if ctx.Bool("search-only") {
+					return s.RebuildSearch(ctx.Str("sphere"))
+				}
+				return s.Reindex(ctx.Str("sphere"))
+			})
 		},
 	})
 	spec.Register(&spec.Action{
@@ -587,4 +596,41 @@ func Invoke(a *spec.Action, ctx *spec.Context) (any, error) {
 		}
 	}
 	return a.Run(ctx)
+}
+
+func stateFilter(s string) string {
+	if s == "all" {
+		return ""
+	}
+	return s
+}
+
+func init() {
+	spec.Register(&spec.Action{
+		Category: "artefacts", Name: "search", Right: "read",
+		Summary:    "Find artefacts by words of their title, file name, card or text content.",
+		Discussion: "Every word must match the start of a word, accents and case ignored; title and file name weigh more than the content. The content searched is the text of a text payload, or the text rendition of other files once it exists. A sealed artefact is found by its card only.",
+		Params: []spec.Param{
+			{Name: "query", Kind: spec.StringList, Positional: true, Required: true, Help: "Words to find."},
+			{Name: "sphere", Kind: spec.String, Help: "Search this sphere only. Defaults to every granted sphere."},
+			{Name: "limit", Kind: spec.String, Default: "20", Help: "Maximum number of results.", Aliases: []string{"n"}},
+			{Name: "state", Kind: spec.String, Default: "all", Enum: []string{"active", "archived", "all"}, Help: "Which artefacts to search: active, archived or all."},
+		},
+		Examples: []string{"artefact search décompte assura", "artefact search ordonnance rochat --sphere perso", "artefact search bail --state archived"},
+		Effects:  []string{"Reads only."},
+		Run: func(ctx *spec.Context) (any, error) {
+			limit, err := strconv.Atoi(ctx.Str("limit"))
+			if err != nil || limit <= 0 {
+				return nil, spec.UserError("--limit takes a positive number, got %q", ctx.Str("limit"))
+			}
+			return run(ctx, func(s *store.Store) (any, error) {
+				return s.Search(strings.Join(ctx.List("query"), " "), ctx.Str("sphere"), limit, ctx.Str("state"))
+			})
+		},
+		Text: func(w io.Writer, r any) {
+			for _, h := range r.([]store.SearchHit) {
+				fmt.Fprintf(w, "%s  %-6s %s  %s\n    %s\n", h.ID, h.Sphere, h.Date, h.Title, strings.ReplaceAll(h.Snippet, "\n", " "))
+			}
+		},
+	})
 }

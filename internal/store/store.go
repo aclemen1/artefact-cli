@@ -416,6 +416,9 @@ func (s *Store) Put(r io.Reader, o PutOptions) (*PutResult, error) {
 	if err := x.Put(rowOf(c, rel), c.Holders); err != nil {
 		return nil, err
 	}
+	if err := s.indexSearch(x, dir, c); err != nil {
+		return nil, err
+	}
 	if o.Key != "" {
 		if err := x.PutKey(o.Key, id, match); err != nil {
 			return nil, err
@@ -487,7 +490,10 @@ func (s *Store) saveCard(ref *Ref, c *Card, at string) error {
 	if err := x.Put(rowOf(c, ref.Row.Path), c.Holders); err != nil {
 		return err
 	}
-	return x.PutClasses(c.ID, classRows(c))
+	if err := x.PutClasses(c.ID, classRows(c)); err != nil {
+		return err
+	}
+	return s.indexSearch(x, ref.Dir, c)
 }
 
 func classRows(c *Card) []index.ClassRow {
@@ -500,7 +506,7 @@ func classRows(c *Card) []index.ClassRow {
 
 func rowOf(c *Card, rel string) index.Row {
 	return index.Row{ID: c.ID, Digest: c.Digest, Title: c.Title, Filename: c.Filename, Mime: c.Mime, Size: c.Size,
-		Date: c.Date, Version: c.Version, Sealed: c.Sealed, Deposited: c.Deposited, Updated: c.Updated, Path: rel, Keyed: c.Keyed, Ext: c.Ext}
+		Date: c.Date, Version: c.Version, Sealed: c.Sealed, Deposited: c.Deposited, Updated: c.Updated, Path: rel, Keyed: c.Keyed, Ext: c.Ext, Archived: c.Archived}
 }
 
 func detectMime(path, ext string) string {
@@ -875,6 +881,9 @@ func (s *Store) reindex(sphere string) (ReindexResult, error) {
 		if err := x.PutClasses(c.ID, classRows(c)); err != nil {
 			return err
 		}
+		if err := s.indexSearch(x, dir, c); err != nil {
+			return err
+		}
 		evs, err := readEvents(dir)
 		if err != nil {
 			return err
@@ -978,4 +987,39 @@ func payloadExt(objDir string) string {
 		}
 	}
 	return ""
+}
+
+// Archive marks an artefact archived, or active again: it stays kept,
+// replicated and reachable by its id and view path, and leaves the lists.
+func (s *Store) Archive(ref string, archived bool, reason string) (*Card, error) {
+	r, err := s.Resolve(ref)
+	if err != nil {
+		return nil, err
+	}
+	unlock, err := s.lock(r.Sphere)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	c, err := readCard(r.Dir)
+	if err != nil {
+		return nil, err
+	}
+	if archived == (c.Archived != "") {
+		return c, nil
+	}
+	at := s.now()
+	typ := "unarchive"
+	c.Archived = ""
+	if archived {
+		typ, c.Archived = "archive", at[:10]
+	}
+	var detail map[string]any
+	if reason != "" {
+		detail = map[string]any{"reason": reason}
+	}
+	if err := appendEvent(r.Dir, Event{At: at, Type: typ, Agent: s.Agent, Outcome: "ok", Detail: detail}); err != nil {
+		return nil, err
+	}
+	return c, s.saveCard(r, c, at)
 }

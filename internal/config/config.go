@@ -19,12 +19,26 @@ type Config struct {
 	// Keys maps a sphere to its age recipient (public key).
 	Keys  map[string]string `yaml:"keys,omitempty"`
 	Erase Erase             `yaml:"erase,omitempty"`
+	Serve Serve             `yaml:"serve,omitempty"`
 
 	path string `yaml:"-"`
 }
 
 type Erase struct {
 	CodeTTL string `yaml:"code_ttl,omitempty"` // validity of an erasure code, default 10m
+}
+
+type Serve struct {
+	Socket string `yaml:"socket,omitempty"` // default ~/.local/state/artefact/sock
+	HTTP   string `yaml:"http,omitempty"`   // loopback address, e.g. 127.0.0.1:7780
+}
+
+// SocketPath is the Unix socket of `artefact serve`.
+func (c *Config) SocketPath() string {
+	if c.Serve.Socket != "" {
+		return Expand(c.Serve.Socket)
+	}
+	return Expand("~/.local/state/artefact/sock")
 }
 
 // CodeTTL is the validity of an erasure code.

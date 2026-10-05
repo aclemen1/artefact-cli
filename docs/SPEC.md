@@ -516,7 +516,7 @@ own project (any file to text, for agents).
 | `GET /<sphere>/a/<id>/card` | the card, JSON |
 | `GET /<sphere>/a/<id>/renditions/<name>` | a rendition |
 | `GET /<sphere>/h/sha256/<hex>` | the payload with this digest |
-| `POST /v1/<action>` | every action of §5.1, same parameters and envelope |
+| `POST /v1/<action>` | every remote action, same parameters and envelope; a JSON body carries the parameters, and for `put` a non-JSON body is the payload with the parameters in the query |
 | `/mcp` | MCP Streamable HTTP |
 
 - Every request carries a token (§12), except from the local CLI through the
@@ -568,9 +568,22 @@ part of `artefact` written in Swift.
 
 - A token carries spheres and rights: `read`, `write`, `reveal`, `erase`.
   `artefact token create --name mnemo-perso --spheres perso --rights
-  read,write,reveal`.
-- A refused sphere produces an explicit error, never an empty list.
-- Tokens are stored as SHA-256 hashes.
+  read,write,reveal`. It is shown once and stored as a SHA-256 hash in
+  `.artefact/tokens.json`.
+- On the Unix socket (mode 0600, so only the user's processes reach it), a
+  request without a token has every sphere and right, like the local CLI; a
+  request with a token is limited to the token. Over TCP, a token is
+  required. `X-Artefact-Agent` names the caller in the event logs.
+- `artefact mcp` grants `--rights read,write` by default; `reveal` and
+  `erase` are given only when named.
+- Each action declares the right it needs (`schema` shows it as `right`).
+  Actions without one (`init`, `key`, `token`, `serve`, `mcp`, `reindex`)
+  stay on the local CLI.
+- Local paths (`put <file>`, `get --out`, `redact --from`) are accepted on
+  the Unix socket and MCP stdio only. Over TCP, payloads travel in the
+  request or the response.
+- An id of an ungranted sphere is reported as missing; a URI of an
+  ungranted sphere is refused explicitly.
 
 ## 13. TUI
 

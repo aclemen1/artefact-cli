@@ -42,6 +42,9 @@ type Action struct {
 	Destructive bool     `json:"destructive"`
 	// Meta actions default to text output; action commands default to JSON.
 	Meta bool `json:"-"`
+	// Right is what a token needs to call the action over REST or MCP:
+	// read, write or erase. Empty: the action is local to the CLI.
+	Right string `json:"right,omitempty"`
 	// Run returns the result payload. A nil result yields {"ok": true}.
 	Run func(ctx *Context) (any, error) `json:"-"`
 	// Text renders the result for --format text. Nil falls back to indented JSON.
@@ -54,6 +57,34 @@ type Context struct {
 	Format string
 	Stdin  io.Reader
 	Stdout io.Writer
+	// Access limits a call that comes through the server or MCP. Nil: the
+	// local CLI, with every configured sphere.
+	Access *Access
+}
+
+// Access is the scope of a remote caller.
+type Access struct {
+	Spheres    []string
+	Rights     []string
+	Agent      string
+	LocalPaths bool // the caller shares this machine's files (Unix socket, MCP stdio)
+}
+
+func (a *Access) Can(right string) bool {
+	if a == nil {
+		return true
+	}
+	for _, r := range a.Rights {
+		if r == right {
+			return true
+		}
+	}
+	return false
+}
+
+// Forbidden is the error of a call outside the caller's rights.
+func Forbidden(format string, a ...any) *Error {
+	return &Error{Code: ExitForbidden, Kind: "forbidden", Message: fmt.Sprintf(format, a...)}
 }
 
 // Streamed is returned by an action that wrote raw bytes to Stdout itself:
@@ -87,10 +118,11 @@ type Error struct {
 func (e *Error) Error() string { return e.Message }
 
 const (
-	ExitError    = 1
-	ExitUsage    = 2
-	ExitNotFound = 3
-	ExitLocked   = 5
+	ExitError     = 1
+	ExitUsage     = 2
+	ExitNotFound  = 3
+	ExitLocked    = 5
+	ExitForbidden = 6
 )
 
 func UserError(format string, a ...any) *Error {
@@ -324,4 +356,80 @@ func writeJSON(w io.Writer, v any) {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(v)
+}
+
+// ArgsFrom maps JSON-like arguments (REST body, MCP tool call, query string)
+// onto the action's params, with the same defaults and checks as Parse.
+func ArgsFrom(a *Action, in map[string]any) (map[string]any, error) {
+	out := map[string]any{}
+	known := map[string]*Param{}
+	for i := range a.Params {
+		p := &a.Params[i]
+		known[p.Name] = p
+		for _, al := range p.Aliases {
+			known[al] = p
+		}
+	}
+	for k, v := range in {
+		p, ok := known[k]
+		if !ok {
+			return nil, UserError("unknown parameter %q for %s. Parameters: %s", k, a.Name, paramNames(a))
+		}
+		switch p.Kind {
+		case Bool:
+			switch b := v.(type) {
+			case bool:
+				out[p.Name] = b
+			case string:
+				out[p.Name] = b == "1" || b == "true"
+			default:
+				return nil, UserError("%s takes true or false, got %v", p.Name, v)
+			}
+		case StringList:
+			switch l := v.(type) {
+			case []string:
+				out[p.Name] = l
+			case []any:
+				var ss []string
+				for _, x := range l {
+					ss = append(ss, fmt.Sprint(x))
+				}
+				out[p.Name] = ss
+			default:
+				out[p.Name] = []string{fmt.Sprint(v)}
+			}
+		default:
+			switch x := v.(type) {
+			case string:
+				out[p.Name] = x
+			case float64:
+				out[p.Name] = strings.TrimSuffix(fmt.Sprintf("%f", x), ".000000")
+			default:
+				out[p.Name] = fmt.Sprint(v)
+			}
+			if err := checkEnum(a, p, out[p.Name].(string)); err != nil {
+				return nil, err
+			}
+		}
+	}
+	for _, p := range a.Params {
+		if _, set := out[p.Name]; set {
+			continue
+		}
+		if p.Required {
+			return nil, UserError("missing %s for %s. Example: %s", p.Name, a.Name, firstExample(a))
+		}
+		if p.Default != "" {
+			out[p.Name] = p.Default
+		}
+	}
+	return out, nil
+}
+
+func paramNames(a *Action) string {
+	var n []string
+	for _, p := range a.Params {
+		n = append(n, p.Name)
+	}
+	return strings.Join(n, ", ")
 }

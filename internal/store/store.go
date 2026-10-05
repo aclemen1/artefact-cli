@@ -859,3 +859,21 @@ func (s *Store) reindex(sphere string) (ReindexResult, error) {
 	})
 	return ReindexResult{Sphere: sphere, Artefacts: n}, err
 }
+
+// FindDigest returns the id of the unsealed artefact of sphere whose current
+// payload has this digest (sha256:<hex>).
+func (s *Store) FindDigest(sphere, digest string) (string, error) {
+	sp, err := s.sphereOrDefault(sphere)
+	if err != nil {
+		return "", err
+	}
+	x, err := s.index(sp)
+	if err != nil {
+		return "", err
+	}
+	row, err := x.ByDigest(digest)
+	if errors.Is(err, index.ErrNotFound) {
+		return "", &NotFound{fmt.Sprintf("no artefact with digest %s in sphere %s", digest, sp)}
+	}
+	return row.ID, err
+}

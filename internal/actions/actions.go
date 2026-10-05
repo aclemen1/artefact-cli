@@ -35,7 +35,11 @@ func open(ctx *spec.Context) (*store.Store, error) {
 	if agent == "" {
 		agent = "artefact-cli/" + Version
 	}
-	return store.Open(cfg, nil, agent)
+	var spheres []string
+	if ctx.Access != nil {
+		spheres, agent = ctx.Access.Spheres, ctx.Access.Agent
+	}
+	return store.Open(cfg, spheres, agent)
 }
 
 // wrap maps store errors onto the envelope's kinds.
@@ -79,7 +83,7 @@ func parseHolds(list []string) ([]index.Holder, error) {
 func init() {
 	// ---------------------------------------------------------------- artefacts
 	spec.Register(&spec.Action{
-		Category: "artefacts", Name: "put",
+		Category: "artefacts", Name: "put", Right: "write",
 		Summary:    "Deposit a file as an artefact, or find the artefact that already holds it.",
 		Discussion: "Idempotent within the sphere: a payload already stored returns its artefact with status known, plus the holders recorded on it. --key makes a retried deposit return the first result. A deposit is atomic: an interrupted put leaves nothing.",
 		Params: []spec.Param{
@@ -111,7 +115,9 @@ func init() {
 				o := store.PutOptions{Sphere: ctx.Str("sphere"), Filename: ctx.Str("filename"), Title: ctx.Str("title"),
 					Date: ctx.Str("date"), Mime: ctx.Str("mime"), Holds: holds, Card: ctx.Str("card"), Key: ctx.Str("key"), Seal: ctx.Bool("seal")}
 				var r io.Reader
-				if f := ctx.Str("file"); f == "-" {
+				if f := ctx.Str("file"); f != "-" && !localPaths(ctx) {
+					return nil, spec.UserError("this server does not read local paths; send the payload itself (file \"-\")")
+				} else if f == "-" {
 					r = ctx.Stdin
 				} else {
 					fh, err := os.Open(config.Expand(f))
@@ -132,7 +138,7 @@ func init() {
 		},
 	})
 	spec.Register(&spec.Action{
-		Category: "artefacts", Name: "get",
+		Category: "artefacts", Name: "get", Right: "read",
 		Summary: "Write an artefact's payload to standard output or to a file.",
 		Params: []spec.Param{
 			{Name: "id", Kind: spec.String, Positional: true, Required: true, Help: "Artefact id (ULID) or URI artefact://<sphere>/<id>."},
@@ -144,6 +150,12 @@ func init() {
 		Effects:  []string{"Reads only. With --out, creates or replaces that file."},
 		Run: func(ctx *spec.Context) (any, error) {
 			return run(ctx, func(s *store.Store) (any, error) {
+				if ctx.Bool("reveal") && !ctx.Access.Can("reveal") {
+					return nil, spec.Forbidden("this token has no reveal right; a sealed artefact stays sealed")
+				}
+				if ctx.Str("out") != "" && !localPaths(ctx) {
+					return nil, spec.UserError("this server does not write local files; read the payload without --out")
+				}
 				rc, c, err := s.OpenPayload(ctx.Str("id"), ctx.Str("version"), ctx.Bool("reveal"))
 				if err != nil {
 					return nil, err
@@ -173,7 +185,7 @@ func init() {
 		},
 	})
 	spec.Register(&spec.Action{
-		Category: "artefacts", Name: "stat",
+		Category: "artefacts", Name: "stat", Right: "read",
 		Summary:    "Describe artefacts: card, versions, holders, locations.",
 		Discussion: "Takes one or many ids in one call; ids that match no artefact are listed under missing, not reported as an error.",
 		Params: []spec.Param{
@@ -193,7 +205,7 @@ func init() {
 		},
 	})
 	spec.Register(&spec.Action{
-		Category: "artefacts", Name: "ls",
+		Category: "artefacts", Name: "ls", Right: "read",
 		Summary: "List artefacts, newest deposit first.",
 		Params: []spec.Param{
 			{Name: "sphere", Kind: spec.String, Help: "List this sphere only. Defaults to every granted sphere."},
@@ -220,7 +232,7 @@ func init() {
 		},
 	})
 	spec.Register(&spec.Action{
-		Category: "artefacts", Name: "card",
+		Category: "artefacts", Name: "card", Right: "write",
 		Summary:    "Edit an artefact's card: title, date, filename, mime, Dublin Core terms, extensions.",
 		Discussion: "--set dc.<term>= or x.<namespace>.<key>= with an empty value removes it. --merge merges dc terms one by one and replaces x namespaces whole. The core fields (id, sphere, digest, size, version, holders) are written by artefact only.",
 		Params: []spec.Param{
@@ -235,7 +247,7 @@ func init() {
 		},
 	})
 	spec.Register(&spec.Action{
-		Category: "artefacts", Name: "hold",
+		Category: "artefacts", Name: "hold", Right: "write",
 		Summary:    "Record that a tool or person relies on an artefact.",
 		Discussion: "Idempotent: holding twice with the same --by and --ref records one holder.",
 		Params: []spec.Param{
@@ -250,7 +262,7 @@ func init() {
 		},
 	})
 	spec.Register(&spec.Action{
-		Category: "artefacts", Name: "release",
+		Category: "artefacts", Name: "release", Right: "write",
 		Summary:    "Withdraw a holder from an artefact.",
 		Discussion: "Without --ref, removes every holder of --by. Releasing an absent holder succeeds with released 0. An artefact left without holders is not deleted; `artefact ls --orphaned` lists it.",
 		Params: []spec.Param{
@@ -272,7 +284,7 @@ func init() {
 	})
 
 	spec.Register(&spec.Action{
-		Category: "artefacts", Name: "seal",
+		Category: "artefacts", Name: "seal", Right: "write",
 		Summary:     "Seal an artefact with its sphere's age key and erase its clear versions.",
 		Discussion:  "The artefact keeps its id and holders and becomes a single sealed version; every clear version is erased from the store. Sealing a sealed artefact does nothing (status already_sealed).",
 		Params:      []spec.Param{{Name: "id", Kind: spec.String, Positional: true, Required: true, Help: "Artefact id or URI."}},
@@ -284,7 +296,7 @@ func init() {
 		},
 	})
 	spec.Register(&spec.Action{
-		Category: "artefacts", Name: "redact",
+		Category: "artefacts", Name: "redact", Right: "write",
 		Summary:    "Add a version made from a redacted copy of the payload; with --purge, erase the earlier versions.",
 		Discussion: "The redacted file is copied into the store. A sealed artefact stays sealed: the new version is encrypted too.",
 		Params: []spec.Param{
@@ -296,11 +308,14 @@ func init() {
 		Effects:     []string{"Adds a version; with --purge, deletes the earlier versions from the store.", "Appends a redact event."},
 		Destructive: true,
 		Run: func(ctx *spec.Context) (any, error) {
+			if !localPaths(ctx) {
+				return nil, spec.UserError("redact reads --from on this machine; this server does not read local paths")
+			}
 			return run(ctx, func(s *store.Store) (any, error) { return s.Redact(ctx.Str("id"), ctx.Str("from"), ctx.Bool("purge")) })
 		},
 	})
 	spec.Register(&spec.Action{
-		Category: "artefacts", Name: "erase",
+		Category: "artefacts", Name: "erase", Right: "erase",
 		Summary: "Erase artefacts, or one version, for good: first a plan and a code, then --confirm <code>.",
 		Discussion: "Step 1 returns the plan, its digest and a single-use code, valid ten minutes by default (erase.code_ttl). In a terminal, the code is asked for at once; --plan returns it instead, for a caller that confirms through its own interface. " +
 			"Step 2, --confirm <code>, plans again and refuses if anything changed, then deletes the objects and leaves a tombstone. The proof names no file and no title. A held artefact needs its holders to release it, or a human's --force.",
@@ -329,8 +344,11 @@ func init() {
 				if len(ctx.List("id")) == 0 {
 					return nil, spec.UserError("name the artefacts to erase. Example: artefact erase 01K9B3T0Z6Q8M2C4R7V1X5N9PA --plan")
 				}
+				if ctx.Bool("force") && ctx.Access != nil {
+					return nil, spec.Forbidden("--force is for a human at the CLI; holders release their artefacts first")
+				}
 				plan, err := s.PlanErase(store.EraseRequest{Refs: ctx.List("id"), Version: ctx.Str("version"), Force: ctx.Bool("force")})
-				if err != nil || ctx.Bool("plan") || !interactive() {
+				if err != nil || ctx.Bool("plan") || ctx.Access != nil || !interactive() {
 					return plan, err
 				}
 				printPlan(plan)
@@ -447,7 +465,7 @@ func init() {
 		},
 	})
 	spec.Register(&spec.Action{
-		Category: "ops", Name: "du",
+		Category: "ops", Name: "du", Right: "read",
 		Summary:  "Count artefacts and bytes per sphere.",
 		Params:   []spec.Param{{Name: "sphere", Kind: spec.String, Help: "Count this sphere only."}},
 		Examples: []string{"artefact du", "artefact du --sphere perso"},
@@ -545,4 +563,19 @@ func printPlan(p *store.Plan) {
 		fmt.Fprintln(os.Stderr)
 	}
 	fmt.Fprintf(os.Stderr, "Code valid until %s.\n", p.Expires)
+}
+
+func localPaths(ctx *spec.Context) bool { return ctx.Access == nil || ctx.Access.LocalPaths }
+
+// Invoke runs an action for a remote caller, within its rights.
+func Invoke(a *spec.Action, ctx *spec.Context) (any, error) {
+	if ctx.Access != nil {
+		if a.Right == "" {
+			return nil, spec.Forbidden("%s is not available over the server; run `artefact %s` on the machine", a.Name, a.Name)
+		}
+		if !ctx.Access.Can(a.Right) {
+			return nil, spec.Forbidden("this token lacks the %s right that %s needs", a.Right, a.Name)
+		}
+	}
+	return a.Run(ctx)
 }

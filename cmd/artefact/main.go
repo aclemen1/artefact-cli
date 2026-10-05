@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/aclemen1/artefact-cli/internal/actions"
+	_ "github.com/aclemen1/artefact-cli/internal/server"
 	"github.com/aclemen1/artefact-cli/internal/spec"
 )
 

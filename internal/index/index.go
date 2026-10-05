@@ -260,7 +260,28 @@ type Filter struct {
 	Unclassified string // keep the artefacts without a node in this plan
 	Orphaned     bool
 	Since        string // deposited on or after this date
+	SortKey      string // date, deposited (default), updated, title, size
+	SortDesc     bool
 	Limit        int
+}
+
+var orderColumns = map[string]string{"date": "date", "deposited": "deposited", "updated": "updated", "title": "title COLLATE NOCASE", "size": "size"}
+
+// order is the ORDER BY clause of f; rows without a date go last.
+func (f Filter) order() string {
+	col, ok := orderColumns[f.SortKey]
+	if !ok {
+		return `deposited DESC, id DESC`
+	}
+	dir := "ASC"
+	if f.SortDesc {
+		dir = "DESC"
+	}
+	o := col + " " + dir + ", deposited DESC, id DESC"
+	if f.SortKey == "date" {
+		o = "(date = '') ASC, " + o
+	}
+	return o
 }
 
 func (x *Index) List(f Filter) ([]Row, error) {
@@ -318,7 +339,7 @@ func (x *Index) List(f Filter) ([]Row, error) {
 	if len(where) > 0 {
 		q += ` WHERE ` + strings.Join(where, " AND ")
 	}
-	q += ` ORDER BY deposited DESC, id DESC`
+	q += ` ORDER BY ` + f.order()
 	if f.Limit > 0 {
 		q += fmt.Sprintf(` LIMIT %d`, f.Limit)
 	}
@@ -375,6 +396,15 @@ func (x *Index) PutRemote(f RemoteFile) error {
 func (x *Index) DeleteRemote(backend, path string) error {
 	_, err := x.db.Exec(`DELETE FROM remote_files WHERE backend = ? AND path = ?`, backend, path)
 	return err
+}
+
+// ForgetBackend drops every copy record of backend; it returns how many.
+func (x *Index) ForgetBackend(backend string) (int64, error) {
+	r, err := x.db.Exec(`DELETE FROM remote_files WHERE backend = ?`, backend)
+	if err != nil {
+		return 0, err
+	}
+	return r.RowsAffected()
 }
 
 func (x *Index) SetVerified(backend, path, at string) error {

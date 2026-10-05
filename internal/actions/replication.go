@@ -63,11 +63,11 @@ func init() {
 			{Name: "type", Kind: spec.String, Enum: []string{"drive", "remote"}, Default: "remote", Help: "drive: create a Google Drive remote; remote: use --remote as given."},
 			{Name: "remote", Kind: spec.String, Help: "rclone remote path. Defaults to <name>:artefact for --type drive."},
 			{Name: "untrusted", Kind: spec.Bool, Help: "Its copies do not count towards numcopies and mincopies."},
-			{Name: "client-id", Kind: spec.String, Help: "Your Google OAuth client id, for add --type drive or reconnect."},
+			{Name: "client-id", Kind: spec.String, Help: "Your Google OAuth client id, for add --type drive or reconnect. reconnect without it keeps the configured client."},
 			{Name: "client-secret", Kind: spec.String, Help: "Its secret, for add --type drive or reconnect."},
 		},
 		Examples: []string{"artefact backend add gdrive-perso --sphere perso --type drive", "artefact backend add disk --sphere perso --remote :local:/Volumes/Backup/artefact", "artefact backend ls", "artefact backend reconnect gdrive-perso --client-id 123.apps.googleusercontent.com --client-secret GOCSPX-…"},
-		Effects:  []string{"add: may open the browser for consent; writes rclone.conf and the artefact configuration."},
+		Effects:  []string{"add: may open the browser for consent; writes rclone.conf and the artefact configuration.", "reconnect: opens the browser for consent; forgets the backend's copy records, so the next sync sends every file again."},
 		Run: func(ctx *spec.Context) (any, error) {
 			path := ctx.Config
 			if path == "" {
@@ -108,7 +108,19 @@ func init() {
 					return nil, fmt.Errorf("drive set-up: %w", err)
 				}
 				_ = os.Chmod(rc, 0o600)
-				return map[string]any{"backend": name, "own_client": ctx.Str("client-id") != "",
+				// A new client or account sees none of the earlier copies (scope drive.file):
+				// forget them so that the next sync sends everything again.
+				s, err := store.Open(cfg, []string{b.Sphere}, "artefact-cli/"+Version)
+				if err != nil {
+					return nil, wrap(err)
+				}
+				defer s.Close()
+				forgotten, err := s.ForgetBackend(b.Sphere, name)
+				if err != nil {
+					return nil, err
+				}
+				clientID, _ := backend.ClientID(name)
+				return map[string]any{"backend": name, "client_id": clientID, "copies_forgotten": forgotten,
 					"next": "restart serve: launchctl kickstart -k gui/$(id -u)/aero.clement.artefact"}, nil
 			}
 			name, sp := ctx.Str("name"), ctx.Str("sphere")

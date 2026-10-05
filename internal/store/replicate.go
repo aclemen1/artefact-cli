@@ -803,3 +803,12 @@ func (s *Store) CopyStates(items []ListItem) map[string]CopyState {
 	}
 	return out
 }
+
+// ForgetBackend drops the copy records of backend in sphere.
+func (s *Store) ForgetBackend(sphere, backend string) (int64, error) {
+	x, err := s.index(sphere)
+	if err != nil {
+		return 0, err
+	}
+	return x.ForgetBackend(backend)
+}

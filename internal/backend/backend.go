@@ -150,8 +150,16 @@ func CreateDrive(ctx context.Context, name string) error {
 // OAuth client; empty values use rclone's shared client.
 func CreateDriveWith(ctx context.Context, name, clientID, clientSecret string) error {
 	params := map[string]any{"scope": "drive.file", "use_trash": "false"}
+	if clientID == "" {
+		// Consent again with the client already configured, not rclone's shared one.
+		clientID, _ = config.FileGetValue(name, "client_id")
+		clientSecret, _ = config.FileGetValue(name, "client_secret")
+	}
 	if clientID != "" {
 		params["client_id"], params["client_secret"] = clientID, clientSecret
+	}
+	if v, ok := config.FileGetValue(name, "pacer_min_sleep"); ok && v != "" {
+		params["pacer_min_sleep"] = v
 	}
 	_, err := config.CreateRemote(ctx, name, "drive", params, config.UpdateRemoteOpt{})
 	return err
@@ -159,3 +167,6 @@ func CreateDriveWith(ctx context.Context, name, clientID, clientSecret string) e
 
 // Remotes lists the remotes of artefact's rclone configuration.
 func Remotes() []string { return config.FileSections() }
+
+// ClientID returns the OAuth client id configured for remote name.
+func ClientID(name string) (string, bool) { return config.FileGetValue(name, "client_id") }

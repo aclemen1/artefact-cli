@@ -49,7 +49,7 @@ func TestTags(t *testing.T) {
 	if l, _ := s.List("", index.Filter{Tag: "avs"}); len(l) != 1 || l[0].ID != a.ID {
 		t.Errorf("ls --tag: %v", l)
 	}
-	if h, _ := s.Search("jeannette", "", 5, "all"); len(h) != 1 {
+	if h, _ := s.Search("jeannette", "", 5, "all", Sort{}); len(h) != 1 {
 		t.Errorf("search by tag: %v", h)
 	}
 	c, _ := s.Tag(a.ID, nil, []string{"avs"})

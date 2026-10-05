@@ -75,7 +75,9 @@ type model struct {
 	prompt   prompt
 	input    textinput.Model
 	filter   string
-	searched bool // m.all holds search results: no local filtering
+	searched bool               // m.all holds search results: no local filtering
+	order    store.Sort         // "" key: deposit date for a list, relevance for a search
+	scores   map[string]float64 // relevance of the search results, by URI
 	plan     *store.Plan
 	force    bool
 
@@ -126,7 +128,10 @@ type (
 		plan *store.Plan
 		err  error
 	}
-	searchMsg struct{ items []store.ListItem }
+	searchMsg struct {
+		items  []store.ListItem
+		scores map[string]float64
+	}
 	tickMsg   struct{}
 	copiesMsg struct {
 		states   map[string]store.CopyState
@@ -242,6 +247,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.all, m.searched = msg.items, false
+		m.sortAll()
 		m.sel = min(m.sel, max(0, len(m.visible())-1))
 		return m, m.refreshCopies()
 	case plansMsg:
@@ -271,7 +277,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.progress = msg.progress
 		return m, nil
 	case searchMsg:
-		m.all, m.searched, m.sel = msg.items, true, 0
+		m.all, m.searched, m.sel, m.scores = msg.items, true, 0, msg.scores
+		m.sortAll()
 		return m, m.refreshCopies()
 	case detailMsg:
 		if msg.err != nil {
@@ -396,6 +403,18 @@ func (m *model) keyList(k tea.KeyPressMsg) tea.Cmd {
 		m.archived = !m.archived
 		m.sel = 0
 		return m.load()
+	case "t":
+		m.order = m.nextOrder()
+		m.sortAll()
+		m.sel = 0
+		m.setStatus("sorted by "+m.orderLabel(), false)
+	case "T":
+		o := m.effectiveOrder()
+		o.Desc = !o.Desc
+		m.order = o
+		m.sortAll()
+		m.sel = 0
+		m.setStatus("sorted by "+m.orderLabel(), false)
 	case "r":
 		m.filter, m.searched, m.classFilter = "", false, treeRow{}
 		return m.load()
@@ -518,15 +537,17 @@ func (m *model) keyPrompt(k tea.KeyPressMsg) tea.Cmd {
 					state = "archived"
 				}
 				return func() tea.Msg {
-					hits, err := m.st.Search(val, sphere, 500, state)
+					hits, err := m.st.Search(val, sphere, 500, state, store.Sort{})
 					if err != nil {
 						return listMsg{err: err}
 					}
 					items := make([]store.ListItem, len(hits))
+					scores := map[string]float64{}
 					for i, h := range hits {
 						items[i] = h.ListItem
+						scores[h.URI] = h.Score
 					}
-					return searchMsg{items}
+					return searchMsg{items, scores}
 				}
 			}
 			return m.load()
@@ -824,6 +845,7 @@ func (m *model) header() string {
 	if m.filter != "" {
 		extra += sMuted.Render("  filter: ") + sText.Render(m.filter)
 	}
+	extra += sMuted.Render("  sort: ") + sText.Render(m.orderLabel())
 	return sTitle.Render("artefact") + sMuted.Render("  ·  ") + scope + sMuted.Render(fmt.Sprintf("  ·  %d artefact(s)", len(m.visible()))) + extra
 }
 
@@ -1045,7 +1067,7 @@ func (m *model) footer() string {
 	case m.mode == modeDetail:
 		help = helpLine("o", "open", "E", "edit content", "e", "edit card", "a", "archive", "S", "seal", "x", "erase", "esc", "back", "?", "keys")
 	default:
-		help = helpLine("enter", "detail", "o", "open", "e/E", "edit card/content", "C", "plans", "c", "classify", "/", "search", "?", "keys", "q", "quit")
+		help = helpLine("enter", "detail", "o", "open", "e/E", "edit card/content", "C", "plans", "c", "classify", "/", "search", "t/T", "sort", "?", "keys", "q", "quit")
 	}
 	status := ""
 	if m.status != "" {
@@ -1086,6 +1108,8 @@ func (m *model) legendLines() []string {
 			{"O", "orphaned only: artefacts no tool holds"},
 			{"P", "pending only: classification waits for you"},
 			{"A", "archives: the archived artefacts instead of the active ones"},
+			{"t", "sort: deposited, date, updated, title, size (and relevance after a search), in turn"},
+			{"T", "reverse the sort: ↓ newest, largest, most relevant first, or Z-A; ↑ the other way"},
 			{"e  E", "edit the card, or the content, of the selected artefact"},
 			{"C", "plans: the classes with their counts; enter lists a class (sub-classes included); C again clears it"},
 			{"c", "classify the selected artefact: pick its class in the plan (your decision, never overwritten)"},
@@ -1283,4 +1307,46 @@ func who() string {
 		return u
 	}
 	return "tui"
+}
+
+// effectiveOrder is the order in force, defaults resolved.
+func (m *model) effectiveOrder() store.Sort {
+	o := m.order
+	if o.Key == "" || (o.Key == "relevance" && !m.searched) {
+		key := "deposited"
+		if m.searched {
+			key = "relevance"
+		}
+		o = store.Sort{Key: key, Desc: store.DefaultDesc(key)}
+	}
+	return o
+}
+
+// nextOrder moves to the next sort key, in its natural direction.
+func (m *model) nextOrder() store.Sort {
+	keys := store.SortKeys[1:]
+	if m.searched {
+		keys = store.SortKeys
+	}
+	cur := m.effectiveOrder().Key
+	i := slices.Index(keys, cur)
+	key := keys[(i+1)%len(keys)]
+	return store.Sort{Key: key, Desc: store.DefaultDesc(key)}
+}
+
+func (m *model) orderLabel() string {
+	o := m.effectiveOrder()
+	arrow := "↑"
+	if o.Desc {
+		arrow = "↓"
+	}
+	return o.Key + " " + arrow
+}
+
+func (m *model) sortAll() {
+	var score func(store.ListItem) float64
+	if m.searched {
+		score = func(it store.ListItem) float64 { return m.scores[it.URI] }
+	}
+	store.SortList(m.all, m.effectiveOrder(), score)
 }

@@ -92,7 +92,7 @@ type SearchHit struct {
 
 // Search finds artefacts of the granted spheres by words of their title,
 // file name, card or text content.
-func (s *Store) Search(q, sphere string, limit int, state string) ([]SearchHit, error) {
+func (s *Store) Search(q, sphere string, limit int, state string, order Sort) ([]SearchHit, error) {
 	if strings.TrimSpace(q) == "" {
 		return nil, userErr("search needs words. Example: artefact search décompte assura")
 	}
@@ -113,7 +113,8 @@ func (s *Store) Search(q, sphere string, limit int, state string) ([]SearchHit, 
 		if err != nil {
 			return nil, err
 		}
-		hits, err := x.Search(q, limit*2)
+		// Another order than relevance needs every match before the cut.
+		hits, err := x.Search(q, max(limit*2, 1000))
 		if err != nil {
 			return nil, err
 		}
@@ -128,7 +129,7 @@ func (s *Store) Search(q, sphere string, limit int, state string) ([]SearchHit, 
 			out = append(out, SearchHit{ListItem: ListItem{Row: row, Sphere: sp, URI: URI(sp, row.ID)}, Snippet: h.Snippet, Score: h.Score})
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Score < out[j].Score })
+	sortHits(out, order.orDefault("relevance"))
 	if len(out) > limit {
 		out = out[:limit]
 	}

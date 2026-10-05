@@ -789,6 +789,10 @@ func (s *Store) List(sphere string, f index.Filter) ([]ListItem, error) {
 			out = append(out, ListItem{Row: r, Sphere: sp, URI: URI(sp, r.ID)})
 		}
 	}
+	if f.SortKey == "relevance" {
+		return nil, userErr("relevance applies to a search only; ls sorts by %s", strings.Join(SortKeys[1:], ", "))
+	}
+	sortItems(out, Sort{Key: f.SortKey, Desc: f.SortDesc}.orDefault("deposited"))
 	if f.Limit > 0 && len(out) > f.Limit {
 		out = out[:f.Limit]
 	}

@@ -240,16 +240,21 @@ func init() {
 			{Name: "tag", Kind: spec.String, Help: "Keep the artefacts with this tag."},
 			{Name: "since", Kind: spec.String, Help: "Keep the artefacts deposited on or after this date (YYYY-MM-DD)."},
 			{Name: "limit", Kind: spec.String, Default: "100", Help: "Maximum number of artefacts; 0 for all.", Aliases: []string{"n"}},
+			{Name: "sort", Kind: spec.String, Help: "Order: date, deposited (default), updated, title or size, with :asc or :desc. Dates and sizes default to newest and largest first, titles to A-Z."},
 		},
-		Examples: []string{"artefact ls --sphere perso", "artefact ls --held-by mnemo --limit 0", "artefact ls --held-by mnemo:01K6Z8Q4V7XW3D9JH2M5N8P0QR", "artefact ls --orphaned"},
+		Examples: []string{"artefact ls --sphere perso", "artefact ls --sort date:asc", "artefact ls --sort title", "artefact ls --held-by mnemo --limit 0", "artefact ls --held-by mnemo:01K6Z8Q4V7XW3D9JH2M5N8P0QR", "artefact ls --orphaned"},
 		Effects:  []string{"Reads only."},
 		Run: func(ctx *spec.Context) (any, error) {
 			limit, err := strconv.Atoi(ctx.Str("limit"))
 			if err != nil || limit < 0 {
 				return nil, spec.UserError("--limit takes a number, got %q. Example: artefact ls --limit 20", ctx.Str("limit"))
 			}
+			order, err := store.ParseSort(ctx.Str("sort"))
+			if err != nil {
+				return nil, wrap(err)
+			}
 			return run(ctx, func(s *store.Store) (any, error) {
-				return s.List(ctx.Str("sphere"), index.Filter{HeldBy: ctx.Str("held-by"), Class: ctx.Str("class"), Pending: ctx.Bool("pending"), State: stateFilter(ctx.Str("state")), Tag: ctx.Str("tag"), Orphaned: ctx.Bool("orphaned"), Since: ctx.Str("since"), Limit: limit})
+				return s.List(ctx.Str("sphere"), index.Filter{HeldBy: ctx.Str("held-by"), Class: ctx.Str("class"), Pending: ctx.Bool("pending"), State: stateFilter(ctx.Str("state")), Tag: ctx.Str("tag"), Orphaned: ctx.Bool("orphaned"), Since: ctx.Str("since"), SortKey: order.Key, SortDesc: order.Desc, Limit: limit})
 			})
 		},
 		Text: func(w io.Writer, r any) {
@@ -652,16 +657,21 @@ func init() {
 			{Name: "sphere", Kind: spec.String, Help: "Search this sphere only. Defaults to every granted sphere."},
 			{Name: "limit", Kind: spec.String, Default: "20", Help: "Maximum number of results.", Aliases: []string{"n"}},
 			{Name: "state", Kind: spec.String, Default: "all", Enum: []string{"active", "archived", "all"}, Help: "Which artefacts to search: active, archived or all."},
+			{Name: "sort", Kind: spec.String, Help: "Order: relevance (default), date, deposited, updated, title or size, with :asc or :desc. The limit applies after the sort."},
 		},
-		Examples: []string{"artefact search décompte assura", "artefact search ordonnance rochat --sphere perso", "artefact search bail --state archived"},
+		Examples: []string{"artefact search décompte assura", "artefact search ordonnance rochat --sphere perso", "artefact search bail --state archived", "artefact search facture assura --sort date"},
 		Effects:  []string{"Reads only."},
 		Run: func(ctx *spec.Context) (any, error) {
 			limit, err := strconv.Atoi(ctx.Str("limit"))
 			if err != nil || limit <= 0 {
 				return nil, spec.UserError("--limit takes a positive number, got %q", ctx.Str("limit"))
 			}
+			order, err := store.ParseSort(ctx.Str("sort"))
+			if err != nil {
+				return nil, wrap(err)
+			}
 			return run(ctx, func(s *store.Store) (any, error) {
-				return s.Search(strings.Join(ctx.List("query"), " "), ctx.Str("sphere"), limit, ctx.Str("state"))
+				return s.Search(strings.Join(ctx.List("query"), " "), ctx.Str("sphere"), limit, ctx.Str("state"), order)
 			})
 		},
 		Text: func(w io.Writer, r any) {

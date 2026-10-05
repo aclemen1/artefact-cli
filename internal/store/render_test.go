@@ -40,7 +40,7 @@ func TestRenderFeedsSearchAndGoesAwayOnSeal(t *testing.T) {
 	if err != nil || text != "QUITTANCE LOYER OCTOBRE" {
 		t.Fatalf("text = %q %v", text, err)
 	}
-	hits, err := s.Search("quittance", "", 10, "")
+	hits, err := s.Search("quittance", "", 10, "", Sort{})
 	if err != nil || len(hits) != 1 {
 		t.Fatalf("search: %v %v", hits, err)
 	}
@@ -55,7 +55,7 @@ func TestRenderFeedsSearchAndGoesAwayOnSeal(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(ref.Dir, extDir, "renditions")); !os.IsNotExist(err) {
 		t.Fatalf("renditions survive the seal: %v", err)
 	}
-	if hits, _ := s.Search("quittance", "", 10, ""); len(hits) != 0 {
+	if hits, _ := s.Search("quittance", "", 10, "", Sort{}); len(hits) != 0 {
 		t.Fatalf("sealed text still searchable: %v", hits)
 	}
 	before, _ := os.ReadFile(calls)

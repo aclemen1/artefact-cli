@@ -245,33 +245,33 @@ func TestSearch(t *testing.T) {
 	sealed := put(t, s, "SECRETWORD inside", PutOptions{Filename: "codes.txt", Title: "Codes de secours", Seal: true})
 	s.EditCard(a.ID, []string{"dc.creator=Assura SA"}, "")
 
-	hits, err := s.Search("decompte", "", 10, "all")
+	hits, err := s.Search("decompte", "", 10, "all", Sort{})
 	if err != nil || len(hits) != 1 || hits[0].ID != a.ID {
 		t.Fatalf("accent-free title: %v %v", hits, err)
 	}
-	if hits, _ := s.Search("franch quote", "", 10, "all"); len(hits) != 1 {
+	if hits, _ := s.Search("franch quote", "", 10, "all", Sort{}); len(hits) != 1 {
 		t.Errorf("prefixes in the content: %v", hits)
 	}
-	if hits, _ := s.Search("plaquenil", "perso", 10, "all"); len(hits) != 0 {
+	if hits, _ := s.Search("plaquenil", "perso", 10, "all", Sort{}); len(hits) != 0 {
 		t.Errorf("a pro artefact found in perso: %v", hits)
 	}
-	if hits, _ := s.Search("plaquenil", "", 10, "all"); len(hits) != 1 || hits[0].Sphere != "pro" {
+	if hits, _ := s.Search("plaquenil", "", 10, "all", Sort{}); len(hits) != 1 || hits[0].Sphere != "pro" {
 		t.Errorf("across spheres: %v", hits)
 	}
-	if hits, _ := s.Search("secretword", "", 10, "all"); len(hits) != 0 {
+	if hits, _ := s.Search("secretword", "", 10, "all", Sort{}); len(hits) != 0 {
 		t.Error("the content of a sealed artefact is searchable")
 	}
-	if hits, _ := s.Search("secours", "", 10, "all"); len(hits) != 1 || hits[0].ID != sealed.ID {
+	if hits, _ := s.Search("secours", "", 10, "all", Sort{}); len(hits) != 1 || hits[0].ID != sealed.ID {
 		t.Errorf("a sealed artefact is found by its card: %v", hits)
 	}
 	s.Archive(a.ID, true, "")
-	if hits, _ := s.Search("assura", "", 10, "active"); len(hits) != 0 {
+	if hits, _ := s.Search("assura", "", 10, "active", Sort{}); len(hits) != 0 {
 		t.Errorf("archived in active search: %v", hits)
 	}
 	if _, err := s.Reindex(""); err != nil {
 		t.Fatal(err)
 	}
-	if hits, _ := s.Search("assura", "", 10, "all"); len(hits) != 1 || !strings.Contains(hits[0].Snippet, "«") {
+	if hits, _ := s.Search("assura", "", 10, "all", Sort{}); len(hits) != 1 || !strings.Contains(hits[0].Snippet, "«") {
 		t.Errorf("after reindex: %v", hits)
 	}
 }

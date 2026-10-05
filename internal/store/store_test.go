@@ -183,7 +183,7 @@ func TestCardEditAndReindex(t *testing.T) {
 func TestGetAndSpheres(t *testing.T) {
 	s := newStore(t)
 	r := put(t, s, "payload bytes", PutOptions{Sphere: "pro", Filename: "f.txt"})
-	rc, _, err := s.OpenPayload(r.ID, "")
+	rc, _, err := s.OpenPayload(r.ID, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestGetAndSpheres(t *testing.T) {
 	if !bytes.Equal(b, []byte("payload bytes")) {
 		t.Errorf("payload = %q", b)
 	}
-	if _, _, err := s.OpenPayload(r.ID, "v2"); err == nil {
+	if _, _, err := s.OpenPayload(r.ID, "v2", false); err == nil {
 		t.Error("v2 does not exist")
 	}
 

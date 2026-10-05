@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS artefacts (
   sealed    INTEGER NOT NULL DEFAULT 0,
   deposited TEXT NOT NULL,
   updated   TEXT NOT NULL,
-  path      TEXT NOT NULL
+  path      TEXT NOT NULL,
+  keyed     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS artefacts_digest ON artefacts(digest);
 CREATE TABLE IF NOT EXISTS holders (
@@ -55,6 +56,7 @@ type Row struct {
 	Deposited string `json:"deposited"`
 	Updated   string `json:"updated"`
 	Path      string `json:"-"` // object root, relative to the sphere's storage root
+	Keyed     string `json:"-"` // keyed digest of a sealed payload's plaintext
 }
 
 type Holder struct {
@@ -76,6 +78,19 @@ func Open(path string) (*Index, error) {
 		db.Close()
 		return nil, fmt.Errorf("index %s: %w", path, err)
 	}
+	// Indexes created before sealed artefacts lack the keyed column.
+	var n int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('artefacts') WHERE name = 'keyed'`).Scan(&n)
+	if n == 0 {
+		if _, err := db.Exec(`ALTER TABLE artefacts ADD COLUMN keyed TEXT NOT NULL DEFAULT ''`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("index %s: %w", path, err)
+		}
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS artefacts_keyed ON artefacts(keyed)`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("index %s: %w", path, err)
+	}
 	return &Index{db: db}, nil
 }
 
@@ -94,12 +109,12 @@ func (x *Index) Put(r Row, holders []Holder) error {
 		return err
 	}
 	defer tx.Rollback()
-	_, err = tx.Exec(`INSERT INTO artefacts (id, digest, title, filename, mime, size, date, version, sealed, deposited, updated, path)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+	_, err = tx.Exec(`INSERT INTO artefacts (id, digest, title, filename, mime, size, date, version, sealed, deposited, updated, path, keyed)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET digest=excluded.digest, title=excluded.title, filename=excluded.filename,
 		mime=excluded.mime, size=excluded.size, date=excluded.date, version=excluded.version, sealed=excluded.sealed,
-		deposited=excluded.deposited, updated=excluded.updated, path=excluded.path`,
-		r.ID, r.Digest, r.Title, r.Filename, r.Mime, r.Size, r.Date, r.Version, r.Sealed, r.Deposited, r.Updated, r.Path)
+		deposited=excluded.deposited, updated=excluded.updated, path=excluded.path, keyed=excluded.keyed`,
+		r.ID, r.Digest, r.Title, r.Filename, r.Mime, r.Size, r.Date, r.Version, r.Sealed, r.Deposited, r.Updated, r.Path, r.Keyed)
 	if err != nil {
 		return err
 	}
@@ -108,6 +123,21 @@ func (x *Index) Put(r Row, holders []Holder) error {
 	}
 	for _, h := range holders {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO holders (id, by, ref, at) VALUES (?,?,?,?)`, r.ID, h.By, h.Ref, h.At); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// Delete removes an artefact, its holders and its idempotency keys.
+func (x *Index) Delete(id string) error {
+	tx, err := x.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []string{`DELETE FROM artefacts WHERE id = ?`, `DELETE FROM holders WHERE id = ?`, `DELETE FROM keys WHERE id = ?`} {
+		if _, err := tx.Exec(q, id); err != nil {
 			return err
 		}
 	}
@@ -128,11 +158,11 @@ func (x *Index) Key(key string) (id, digest string, err error) {
 	return
 }
 
-const cols = `id, digest, title, filename, mime, size, date, version, sealed, deposited, updated, path`
+const cols = `id, digest, title, filename, mime, size, date, version, sealed, deposited, updated, path, keyed`
 
 func scan(s interface{ Scan(...any) error }) (Row, error) {
 	var r Row
-	err := s.Scan(&r.ID, &r.Digest, &r.Title, &r.Filename, &r.Mime, &r.Size, &r.Date, &r.Version, &r.Sealed, &r.Deposited, &r.Updated, &r.Path)
+	err := s.Scan(&r.ID, &r.Digest, &r.Title, &r.Filename, &r.Mime, &r.Size, &r.Date, &r.Version, &r.Sealed, &r.Deposited, &r.Updated, &r.Path, &r.Keyed)
 	return r, err
 }
 
@@ -146,7 +176,16 @@ func (x *Index) Get(id string) (Row, error) {
 
 // ByDigest returns the unsealed artefact whose current payload has digest.
 func (x *Index) ByDigest(digest string) (Row, error) {
-	r, err := scan(x.db.QueryRow(`SELECT `+cols+` FROM artefacts WHERE digest = ? ORDER BY deposited LIMIT 1`, digest))
+	r, err := scan(x.db.QueryRow(`SELECT `+cols+` FROM artefacts WHERE digest = ? AND sealed = 0 ORDER BY deposited LIMIT 1`, digest))
+	if errors.Is(err, sql.ErrNoRows) {
+		err = ErrNotFound
+	}
+	return r, err
+}
+
+// ByKeyed returns the sealed artefact whose plaintext has this keyed digest.
+func (x *Index) ByKeyed(keyed string) (Row, error) {
+	r, err := scan(x.db.QueryRow(`SELECT `+cols+` FROM artefacts WHERE keyed = ? AND sealed = 1 ORDER BY deposited LIMIT 1`, keyed))
 	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrNotFound
 	}

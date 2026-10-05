@@ -2,19 +2,23 @@
 package actions
 
 import (
+	"bufio"
 	_ "embed"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/aclemen1/artefact-cli/internal/config"
 	"github.com/aclemen1/artefact-cli/internal/index"
+	"github.com/aclemen1/artefact-cli/internal/keys"
 	"github.com/aclemen1/artefact-cli/internal/spec"
 	"github.com/aclemen1/artefact-cli/internal/store"
+	"golang.org/x/term"
 )
 
 const Version = "0.1.0-dev"
@@ -88,12 +92,14 @@ func init() {
 			{Name: "hold", Kind: spec.StringList, Help: "Holder to record, <by>:<ref> (repeatable)."},
 			{Name: "card", Kind: spec.String, Help: "YAML of editable card fields to merge: title, date, filename, mime, dc, x."},
 			{Name: "key", Kind: spec.String, Help: "Idempotency key, scoped to the sphere: a second put with this key and the same payload returns the first result."},
+			{Name: "seal", Kind: spec.Bool, Help: "Encrypt the payload with the sphere's age key before anything is written."},
 		},
 		Examples: []string{
 			"artefact put ordonnance-2026-09.pdf",
 			"artefact put scan.png --sphere perso --hold mnemo:01K6Z8Q4V7XW3D9JH2M5N8P0QR --key 01K6Z8Q4V7XW3D9JH2M5N8P0QR",
 			"cat note.txt | artefact put - --filename note.txt --title \"Note de séance\" --date 2026-09-18",
 			"artefact put facture.pdf --card 'dc: {creator: Romande Energie}'",
+			"artefact put codes-2fa.png --seal",
 		},
 		Effects: []string{"Writes a new OCFL object (payload, card, event log) into the sphere's store, unless the payload is known.", "Records the holders given with --hold."},
 		Run: func(ctx *spec.Context) (any, error) {
@@ -103,7 +109,7 @@ func init() {
 			}
 			return run(ctx, func(s *store.Store) (any, error) {
 				o := store.PutOptions{Sphere: ctx.Str("sphere"), Filename: ctx.Str("filename"), Title: ctx.Str("title"),
-					Date: ctx.Str("date"), Mime: ctx.Str("mime"), Holds: holds, Card: ctx.Str("card"), Key: ctx.Str("key")}
+					Date: ctx.Str("date"), Mime: ctx.Str("mime"), Holds: holds, Card: ctx.Str("card"), Key: ctx.Str("key"), Seal: ctx.Bool("seal")}
 				var r io.Reader
 				if f := ctx.Str("file"); f == "-" {
 					r = ctx.Stdin
@@ -132,12 +138,13 @@ func init() {
 			{Name: "id", Kind: spec.String, Positional: true, Required: true, Help: "Artefact id (ULID) or URI artefact://<sphere>/<id>."},
 			{Name: "version", Kind: spec.String, Help: "Version to read, e.g. v1. Defaults to the current one."},
 			{Name: "out", Kind: spec.String, Help: "File to write, with mode 0600; the result then reports it. Without it, the raw bytes go to standard output."},
+			{Name: "reveal", Kind: spec.Bool, Help: "Decrypt a sealed artefact; the clear text exists only where it is written."},
 		},
-		Examples: []string{"artefact get 01K9B3T0Z6Q8M2C4R7V1X5N9PA --out /tmp/task/scan.pdf", "artefact get artefact://perso/01K9B3T0Z6Q8M2C4R7V1X5N9PA > scan.pdf", "artefact get 01K9B3T0Z6Q8M2C4R7V1X5N9PA --version v1 --out v1.pdf"},
+		Examples: []string{"artefact get 01K9B3T0Z6Q8M2C4R7V1X5N9PA --out /tmp/task/scan.pdf", "artefact get artefact://perso/01K9B3T0Z6Q8M2C4R7V1X5N9PA > scan.pdf", "artefact get 01K9B3T0Z6Q8M2C4R7V1X5N9PA --version v1 --out v1.pdf", "artefact get 01K9B3T0Z6Q8M2C4R7V1X5N9PA --reveal --out /tmp/task/codes.png"},
 		Effects:  []string{"Reads only. With --out, creates or replaces that file."},
 		Run: func(ctx *spec.Context) (any, error) {
 			return run(ctx, func(s *store.Store) (any, error) {
-				rc, c, err := s.OpenPayload(ctx.Str("id"), ctx.Str("version"))
+				rc, c, err := s.OpenPayload(ctx.Str("id"), ctx.Str("version"), ctx.Bool("reveal"))
 				if err != nil {
 					return nil, err
 				}
@@ -264,7 +271,124 @@ func init() {
 		},
 	})
 
+	spec.Register(&spec.Action{
+		Category: "artefacts", Name: "seal",
+		Summary:     "Seal an artefact with its sphere's age key and erase its clear versions.",
+		Discussion:  "The artefact keeps its id and holders and becomes a single sealed version; every clear version is erased from the store. Sealing a sealed artefact does nothing (status already_sealed).",
+		Params:      []spec.Param{{Name: "id", Kind: spec.String, Positional: true, Required: true, Help: "Artefact id or URI."}},
+		Examples:    []string{"artefact seal 01K9B3T0Z6Q8M2C4R7V1X5N9PA"},
+		Effects:     []string{"Rewrites the object: one sealed version; the clear versions are deleted from the store.", "Appends a seal event."},
+		Destructive: true,
+		Run: func(ctx *spec.Context) (any, error) {
+			return run(ctx, func(s *store.Store) (any, error) { return s.Seal(ctx.Str("id")) })
+		},
+	})
+	spec.Register(&spec.Action{
+		Category: "artefacts", Name: "redact",
+		Summary:    "Add a version made from a redacted copy of the payload; with --purge, erase the earlier versions.",
+		Discussion: "The redacted file is copied into the store. A sealed artefact stays sealed: the new version is encrypted too.",
+		Params: []spec.Param{
+			{Name: "id", Kind: spec.String, Positional: true, Required: true, Help: "Artefact id or URI."},
+			{Name: "from", Kind: spec.String, Required: true, Help: "The redacted file."},
+			{Name: "purge", Kind: spec.Bool, Help: "Erase every earlier version from the store."},
+		},
+		Examples:    []string{"artefact redact 01K9B3T0Z6Q8M2C4R7V1X5N9PA --from note-redacted.md", "artefact redact 01K9B3T0Z6Q8M2C4R7V1X5N9PA --from note-redacted.md --purge"},
+		Effects:     []string{"Adds a version; with --purge, deletes the earlier versions from the store.", "Appends a redact event."},
+		Destructive: true,
+		Run: func(ctx *spec.Context) (any, error) {
+			return run(ctx, func(s *store.Store) (any, error) { return s.Redact(ctx.Str("id"), ctx.Str("from"), ctx.Bool("purge")) })
+		},
+	})
+	spec.Register(&spec.Action{
+		Category: "artefacts", Name: "erase",
+		Summary: "Erase artefacts, or one version, for good: first a plan and a code, then --confirm <code>.",
+		Discussion: "Step 1 returns the plan, its digest and a single-use code, valid ten minutes by default (erase.code_ttl). In a terminal, the code is asked for at once; --plan returns it instead, for a caller that confirms through its own interface. " +
+			"Step 2, --confirm <code>, plans again and refuses if anything changed, then deletes the objects and leaves a tombstone. The proof names no file and no title. A held artefact needs its holders to release it, or a human's --force.",
+		Params: []spec.Param{
+			{Name: "id", Kind: spec.StringList, Positional: true, Help: "Artefact ids or URIs to erase."},
+			{Name: "version", Kind: spec.String, Help: "Erase only this version of a single artefact, e.g. v1."},
+			{Name: "force", Kind: spec.Bool, Help: "Erase despite holders. For a human only."},
+			{Name: "plan", Kind: spec.Bool, Help: "Return the plan and the code without asking for it."},
+			{Name: "confirm", Kind: spec.String, Help: "Code returned by the plan: runs the erasure."},
+		},
+		Examples: []string{
+			"artefact erase 01K9B3T0Z6Q8M2C4R7V1X5N9PA --plan",
+			"artefact erase --confirm K7QM-3XTP",
+			"artefact erase 01K9B3T0Z6Q8M2C4R7V1X5N9PA --version v1 --plan",
+		},
+		Effects:     []string{"Plan: writes nothing but the pending plan, outside the store.", "Confirm: deletes the objects or versions from the store, removes them from the index, records a tombstone."},
+		Destructive: true,
+		Run: func(ctx *spec.Context) (any, error) {
+			return run(ctx, func(s *store.Store) (any, error) {
+				if code := ctx.Str("confirm"); code != "" {
+					if len(ctx.List("id")) > 0 {
+						return nil, spec.UserError("--confirm takes the code alone. Example: artefact erase --confirm K7QM-3XTP")
+					}
+					return s.ConfirmErase(code)
+				}
+				if len(ctx.List("id")) == 0 {
+					return nil, spec.UserError("name the artefacts to erase. Example: artefact erase 01K9B3T0Z6Q8M2C4R7V1X5N9PA --plan")
+				}
+				plan, err := s.PlanErase(store.EraseRequest{Refs: ctx.List("id"), Version: ctx.Str("version"), Force: ctx.Bool("force")})
+				if err != nil || ctx.Bool("plan") || !interactive() {
+					return plan, err
+				}
+				printPlan(plan)
+				fmt.Fprintf(os.Stderr, "Type the code %s to erase for good, anything else to cancel: ", plan.Code)
+				line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+				if !strings.EqualFold(strings.TrimSpace(line), plan.Code) {
+					return nil, spec.UserError("erasure cancelled: the code was not typed")
+				}
+				return s.ConfirmErase(plan.Code)
+			})
+		},
+	})
+
 	// ---------------------------------------------------------------- ops
+	spec.Register(&spec.Action{
+		Category: "ops", Name: "key",
+		Summary:    "Create a sphere's age key: public key in the configuration, private key in the macOS keychain.",
+		Discussion: "Idempotent: when the keychain already holds the sphere's key, its public key is written back to the configuration and returned.",
+		Params: []spec.Param{
+			{Name: "verb", Kind: spec.String, Positional: true, Required: true, Enum: []string{"init"}, Help: "init"},
+			{Name: "sphere", Kind: spec.String, Required: true, Help: "Sphere of the key."},
+		},
+		Examples: []string{"artefact key init --sphere perso"},
+		Effects:  []string{"Writes the identity into the login keychain (service artefact, account age-<sphere>) and the recipient into the configuration."},
+		Run: func(ctx *spec.Context) (any, error) {
+			cfg, err := config.Load(ctx.Config)
+			if err != nil {
+				return nil, spec.UserError("%v", err)
+			}
+			sp := ctx.Str("sphere")
+			if !slices.Contains(cfg.Spheres, sp) {
+				return nil, spec.UserError("sphere %q is not configured; configured spheres: %s", sp, strings.Join(cfg.Spheres, ", "))
+			}
+			status := "existing"
+			identity, err := keys.Keychain{}.Identity(sp)
+			if err != nil {
+				if identity, _, err = keys.Generate(); err != nil {
+					return nil, err
+				}
+				if err := keys.Store(sp, identity); err != nil {
+					return nil, fmt.Errorf("keychain: %w", err)
+				}
+				status = "created"
+			}
+			rcp, err := keys.Recipient(identity)
+			if err != nil {
+				return nil, err
+			}
+			if cfg.Keys == nil {
+				cfg.Keys = map[string]string{}
+			}
+			cfg.Keys[sp] = rcp
+			if err := cfg.Save(cfg.Path()); err != nil {
+				return nil, err
+			}
+			return map[string]any{"sphere": sp, "recipient": rcp, "status": status}, nil
+		},
+	})
 	spec.Register(&spec.Action{
 		Category: "ops", Name: "init",
 		Summary: "Create the configuration (if absent), one OCFL store and one index per sphere.",
@@ -401,4 +525,24 @@ func init() {
 			return strings.TrimSpace(skillText), nil
 		},
 	})
+}
+
+func interactive() bool {
+	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stderr.Fd()))
+}
+
+func printPlan(p *store.Plan) {
+	fmt.Fprintln(os.Stderr, "Erasure plan:")
+	for _, it := range p.Items {
+		what := "whole artefact"
+		if !it.Whole {
+			what = "version " + strings.Join(it.Versions, ", ")
+		}
+		fmt.Fprintf(os.Stderr, "  %s  %q  %s", it.URI, it.Title, what)
+		if len(it.Holders) > 0 {
+			fmt.Fprintf(os.Stderr, "  (held by %d)", len(it.Holders))
+		}
+		fmt.Fprintln(os.Stderr)
+	}
+	fmt.Fprintf(os.Stderr, "Code valid until %s.\n", p.Expires)
 }

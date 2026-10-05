@@ -29,6 +29,7 @@ type Card struct {
 	Version   int            `yaml:"version" json:"version"`
 	Digest    string         `yaml:"digest" json:"digest"`
 	Sealed    bool           `yaml:"sealed" json:"sealed"`
+	Keyed     string         `yaml:"keyed,omitempty" json:"-"`
 	Deposited string         `yaml:"deposited" json:"deposited"`
 	Updated   string         `yaml:"updated" json:"updated"`
 	DC        map[string]any `yaml:"dc,omitempty" json:"dc,omitempty"`
@@ -98,11 +99,15 @@ func appendEvent(objDir string, e Event) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	return appendEventTo(filepath.Join(dir, eventFile), e)
+}
+
+func appendEventTo(path string, e Event) error {
 	b, err := json.Marshal(e)
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(filepath.Join(dir, eventFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}

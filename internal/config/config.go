@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -15,9 +16,27 @@ type Config struct {
 	Store         string   `yaml:"store"`
 	Spheres       []string `yaml:"spheres"`
 	DefaultSphere string   `yaml:"default_sphere"`
+	// Keys maps a sphere to its age recipient (public key).
+	Keys  map[string]string `yaml:"keys,omitempty"`
+	Erase Erase             `yaml:"erase,omitempty"`
 
 	path string `yaml:"-"`
 }
+
+type Erase struct {
+	CodeTTL string `yaml:"code_ttl,omitempty"` // validity of an erasure code, default 10m
+}
+
+// CodeTTL is the validity of an erasure code.
+func (c *Config) CodeTTL() time.Duration {
+	if d, err := time.ParseDuration(c.Erase.CodeTTL); err == nil && d > 0 {
+		return d
+	}
+	return 10 * time.Minute
+}
+
+// Path is the file the configuration was read from.
+func (c *Config) Path() string { return c.path }
 
 // DefaultPath is ~/.config/artefact/config.yaml, or $ARTEFACT_CONFIG.
 func DefaultPath() string {

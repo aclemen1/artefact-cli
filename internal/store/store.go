@@ -20,6 +20,7 @@ import (
 
 	"github.com/aclemen1/artefact-cli/internal/config"
 	"github.com/aclemen1/artefact-cli/internal/index"
+	"github.com/aclemen1/artefact-cli/internal/keys"
 	"github.com/aclemen1/artefact-cli/internal/ocfl"
 )
 
@@ -40,6 +41,7 @@ type Store struct {
 	Spheres []string // spheres granted to the caller
 	Agent   string   // who acts, written in events
 	Now     func() time.Time
+	Keys    keys.Source
 
 	indexes map[string]*index.Index
 }
@@ -57,7 +59,7 @@ func Open(cfg *config.Config, spheres []string, agent string) (*Store, error) {
 	if agent == "" {
 		agent = "artefact"
 	}
-	return &Store{Cfg: cfg, Spheres: spheres, Agent: agent, Now: time.Now, indexes: map[string]*index.Index{}}, nil
+	return &Store{Cfg: cfg, Spheres: spheres, Agent: agent, Now: time.Now, Keys: keys.Keychain{}, indexes: map[string]*index.Index{}}, nil
 }
 
 func (s *Store) Close() {
@@ -118,7 +120,12 @@ func (s *Store) lock(sphere string) (func(), error) {
 		f.Close()
 		return nil, err
 	}
-	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); f.Close() }, nil
+	release := func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); f.Close() }
+	if err := ocfl.Recover(s.root(sphere)); err != nil {
+		release()
+		return nil, err
+	}
+	return release, nil
 }
 
 func (s *Store) sphereOrDefault(sphere string) (string, error) {
@@ -190,6 +197,7 @@ type PutOptions struct {
 	Holds    []index.Holder // By and Ref; At is set by Put
 	Card     string         // YAML of editable fields, merged into the card
 	Key      string         // idempotency key, scoped to the sphere
+	Seal     bool           // encrypt with the sphere's age key before anything is written
 }
 
 type PutResult struct {
@@ -200,12 +208,53 @@ type PutResult struct {
 	Status  string         `json:"status"` // created | known
 	Digest  string         `json:"digest"`
 	Size    int64          `json:"size"`
+	Sealed  bool           `json:"sealed"`
 	Title   string         `json:"title"`
 	Holders []index.Holder `json:"holders"`
 }
 
-// Put deposits r. It is atomic, and idempotent within the sphere by digest,
-// or by Key when given.
+// sealing encrypts what is read from r for recipient, computing on the way
+// the keyed digest and the size of the plaintext.
+type sealing struct {
+	r     *io.PipeReader
+	done  chan struct{}
+	keyed func() string
+	size  int64
+}
+
+func (s *Store) seal(sphere string, r io.Reader) (*sealing, error) {
+	recipient := s.Cfg.Keys[sphere]
+	if recipient == "" {
+		return nil, userErr("sphere %q has no age key. Run `artefact key init --sphere %s` first", sphere, sphere)
+	}
+	identity, err := s.Keys.Identity(sphere)
+	if err != nil {
+		return nil, userErr("%v", err)
+	}
+	pr, pw := io.Pipe()
+	kw, keyed := keys.Keyed(keys.DedupKey(identity))
+	sl := &sealing{r: pr, done: make(chan struct{}), keyed: keyed}
+	go func() {
+		defer close(sl.done)
+		// age writes its header at once: the encryptor lives on this side
+		// of the pipe so that the reader is already there.
+		enc, err := keys.Encrypt(pw, recipient)
+		if err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+		n, err := io.Copy(enc, io.TeeReader(r, kw))
+		sl.size = n
+		if err == nil {
+			err = enc.Close()
+		}
+		pw.CloseWithError(err)
+	}()
+	return sl, nil
+}
+
+// Put deposits r. It is atomic, and idempotent within the sphere by digest
+// (keyed digest for a sealed payload), or by Key when given.
 func (s *Store) Put(r io.Reader, o PutOptions) (*PutResult, error) {
 	sphere, err := s.sphereOrDefault(o.Sphere)
 	if err != nil {
@@ -227,12 +276,30 @@ func (s *Store) Put(r io.Reader, o PutOptions) (*PutResult, error) {
 	id := ulid.Make().String()
 	now := s.Now()
 	ext := strings.ToLower(filepath.Ext(o.Filename))
-	user := &ocfl.User{Name: s.Agent, Address: "urn:x-artefact-agent:" + url.PathEscape(s.Agent)}
-	staged, err := ocfl.Stage(root, URI(sphere, id), "payload"+ext, r, now, "deposit", user)
+	logical := "payload" + ext
+	var sl *sealing
+	if o.Seal {
+		if sl, err = s.seal(sphere, r); err != nil {
+			return nil, err
+		}
+		r = sl.r
+		logical += ".age"
+	}
+	staged, err := ocfl.Stage(root, URI(sphere, id), logical, r, now, "deposit", s.user())
+	if sl != nil {
+		sl.r.CloseWithError(err) // unblocks the encryptor if staging stopped early
+		<-sl.done
+	}
 	if err != nil {
 		return nil, err
 	}
 	digest := "sha256:" + staged.SHA256
+	size, match := staged.Size, digest
+	keyed := ""
+	if sl != nil {
+		size, keyed = sl.size, sl.keyed()
+		match = keyed
+	}
 
 	unlock, err := s.lock(sphere)
 	if err != nil {
@@ -242,9 +309,9 @@ func (s *Store) Put(r io.Reader, o PutOptions) (*PutResult, error) {
 	defer unlock()
 
 	if o.Key != "" {
-		kid, kdigest, err := x.Key(o.Key)
+		kid, kmatch, err := x.Key(o.Key)
 		switch {
-		case err == nil && kdigest != digest:
+		case err == nil && kmatch != match:
 			staged.Abort()
 			return nil, userErr("key %q was first used for another payload (artefact %s); a key names one payload. Use a new key or omit --key", o.Key, kid)
 		case err == nil:
@@ -255,10 +322,16 @@ func (s *Store) Put(r io.Reader, o PutOptions) (*PutResult, error) {
 			return nil, err
 		}
 	}
-	if row, err := x.ByDigest(digest); err == nil {
+	var row index.Row
+	if sl != nil {
+		row, err = x.ByKeyed(keyed)
+	} else {
+		row, err = x.ByDigest(digest)
+	}
+	if err == nil {
 		staged.Abort()
 		if o.Key != "" {
-			if err := x.PutKey(o.Key, row.ID, digest); err != nil {
+			if err := x.PutKey(o.Key, row.ID, match); err != nil {
 				return nil, err
 			}
 		}
@@ -270,7 +343,11 @@ func (s *Store) Put(r io.Reader, o PutOptions) (*PutResult, error) {
 
 	mt := o.Mime
 	if mt == "" {
-		mt = detectMime(filepath.Join(staged.Dir, "v1", "content", "payload"+ext), ext)
+		if sl != nil {
+			mt = detectMime("", ext)
+		} else {
+			mt = detectMime(filepath.Join(staged.Dir, "v1", "content", logical), ext)
+		}
 	}
 	title := o.Title
 	if title == "" {
@@ -285,8 +362,8 @@ func (s *Store) Put(r io.Reader, o PutOptions) (*PutResult, error) {
 	}
 	at := now.Format(time.RFC3339)
 	c := &Card{
-		ID: id, Sphere: sphere, Title: title, Date: date, Mime: mt, Size: staged.Size,
-		Filename: filepath.Base(o.Filename), Version: 1, Digest: digest,
+		ID: id, Sphere: sphere, Title: title, Date: date, Mime: mt, Size: size,
+		Filename: filepath.Base(o.Filename), Version: 1, Digest: digest, Sealed: sl != nil, Keyed: keyed,
 		Deposited: at, Updated: at, Holders: []index.Holder{},
 	}
 	if c.Filename == "." {
@@ -302,12 +379,9 @@ func (s *Store) Put(r io.Reader, o PutOptions) (*PutResult, error) {
 		h.At = at
 		c.addHolder(h)
 	}
-	detail := map[string]any{}
+	var detail map[string]any
 	if o.Key != "" {
-		detail["key"] = o.Key
-	}
-	if len(detail) == 0 {
-		detail = nil
+		detail = map[string]any{"key": o.Key}
 	}
 	if err := writeCard(staged.Dir, c); err != nil {
 		staged.Abort()
@@ -332,12 +406,24 @@ func (s *Store) Put(r io.Reader, o PutOptions) (*PutResult, error) {
 		return nil, err
 	}
 	if o.Key != "" {
-		if err := x.PutKey(o.Key, id, digest); err != nil {
+		if err := x.PutKey(o.Key, id, match); err != nil {
 			return nil, err
 		}
 	}
 	return &PutResult{ID: id, URI: URI(sphere, id), Sphere: sphere, Version: 1, Status: "created",
-		Digest: digest, Size: c.Size, Title: c.Title, Holders: c.Holders}, nil
+		Digest: digest, Size: c.Size, Sealed: c.Sealed, Title: c.Title, Holders: c.Holders}, nil
+}
+
+func (s *Store) user() *ocfl.User {
+	return &ocfl.User{Name: s.Agent, Address: "urn:x-artefact-agent:" + url.PathEscape(s.Agent)}
+}
+
+// matchDigest is what deduplication and idempotency keys compare.
+func (c *Card) matchDigest() string {
+	if c.Sealed {
+		return c.Keyed
+	}
+	return c.Digest
 }
 
 // known answers a deposit of a payload already stored: it adds the holders
@@ -357,7 +443,7 @@ func (s *Store) known(sphere, id string, holds []index.Holder) (*PutResult, erro
 		}
 	}
 	return &PutResult{ID: id, URI: URI(sphere, id), Sphere: sphere, Version: c.Version, Status: "known",
-		Digest: c.Digest, Size: c.Size, Title: c.Title, Holders: c.Holders}, nil
+		Digest: c.Digest, Size: c.Size, Sealed: c.Sealed, Title: c.Title, Holders: c.Holders}, nil
 }
 
 func (s *Store) addHolders(ref *Ref, c *Card, holds []index.Holder) error {
@@ -392,7 +478,7 @@ func (s *Store) saveCard(ref *Ref, c *Card, at string) error {
 
 func rowOf(c *Card, rel string) index.Row {
 	return index.Row{ID: c.ID, Digest: c.Digest, Title: c.Title, Filename: c.Filename, Mime: c.Mime, Size: c.Size,
-		Date: c.Date, Version: c.Version, Sealed: c.Sealed, Deposited: c.Deposited, Updated: c.Updated, Path: rel}
+		Date: c.Date, Version: c.Version, Sealed: c.Sealed, Deposited: c.Deposited, Updated: c.Updated, Path: rel, Keyed: c.Keyed}
 }
 
 func detectMime(path, ext string) string {
@@ -510,7 +596,7 @@ func (s *Store) EditCard(ref string, sets []string, mergeDoc string) (*Card, err
 }
 
 // Open returns the payload of version v ("" for the current one).
-func (s *Store) OpenPayload(ref, v string) (io.ReadCloser, *Card, error) {
+func (s *Store) OpenPayload(ref, v string, reveal bool) (io.ReadCloser, *Card, error) {
 	r, err := s.Resolve(ref)
 	if err != nil {
 		return nil, nil, err
@@ -519,21 +605,51 @@ func (s *Store) OpenPayload(ref, v string) (io.ReadCloser, *Card, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	inv, err := ocfl.ReadInventory(r.Dir)
+	if c.Sealed && !reveal {
+		return nil, nil, userErr("artefact %s is sealed; pass --reveal to decrypt it. Example: artefact get %s --reveal --out /tmp/task/file", c.ID, c.ID)
+	}
+	f, err := payloadFile(r.Dir, v)
 	if err != nil {
 		return nil, nil, err
 	}
+	rc, err := os.Open(f)
+	if err != nil || !c.Sealed {
+		return rc, c, err
+	}
+	identity, err := s.Keys.Identity(r.Sphere)
+	if err != nil {
+		rc.Close()
+		return nil, nil, userErr("%v", err)
+	}
+	plain, err := keys.Decrypt(rc, identity)
+	if err != nil {
+		rc.Close()
+		return nil, nil, err
+	}
+	return readCloser{plain, rc}, c, nil
+}
+
+type readCloser struct {
+	io.Reader
+	io.Closer
+}
+
+// payloadFile is the content path of the payload of version v ("" for the head).
+func payloadFile(objDir, v string) (string, error) {
+	inv, err := ocfl.ReadInventory(objDir)
+	if err != nil {
+		return "", err
+	}
 	files, err := inv.Files(v)
 	if err != nil {
-		return nil, nil, &UserError{err.Error()}
+		return "", &UserError{err.Error()}
 	}
 	for _, f := range files {
 		if strings.HasPrefix(f.Logical, "payload") {
-			rc, err := os.Open(filepath.Join(r.Dir, filepath.FromSlash(f.Content)))
-			return rc, c, err
+			return ocfl.ContentPath(objDir, f), nil
 		}
 	}
-	return nil, nil, fmt.Errorf("artefact %s has no payload in version %s", r.ID, v)
+	return "", fmt.Errorf("object %s has no payload in version %q", inv.ID, v)
 }
 
 type VersionInfo struct {
@@ -733,7 +849,7 @@ func (s *Store) reindex(sphere string) (ReindexResult, error) {
 		}
 		for _, e := range evs {
 			if k, ok := e.Detail["key"].(string); ok && e.Type == "deposit" {
-				if err := x.PutKey(k, c.ID, c.Digest); err != nil {
+				if err := x.PutKey(k, c.ID, c.matchDigest()); err != nil {
 					return err
 				}
 			}

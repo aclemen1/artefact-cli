@@ -201,7 +201,9 @@ backend (local disk by default).
   and `pro` becomes two artefacts.
 - A sealed artefact is deduplicated by a keyed digest:
   `hmac-sha256(sphere key, plaintext)`. The plaintext SHA-256 is never
-  stored, so a short secret cannot be found by trial.
+  stored, so a short secret cannot be found by trial. The HMAC key is
+  derived from the sphere's age identity, so it lives only in the keychain.
+  A sealed payload never matches a clear one.
 
 ### 4.3 Sealing
 
@@ -384,12 +386,33 @@ Not covered, and listed in the result: backups made outside `artefact`
 deleted files for a while; `artefact` empties them when the API allows),
 copies made by holders.
 
+- The code has the form `XXXX-XXXX`. The pending plan is kept in
+  `.artefact/erase/`, under the SHA-256 of its code: the code itself is
+  never written to disk. A code is consumed by its first use, valid or not.
+- Tombstones are kept in `.artefact/tombstones-<sphere>.jsonl`.
+- `--force` exists on the CLI and in the TUI only; the MCP and REST surfaces
+  do not offer it.
+
 ### 8.1 Rewriting an object
 
-OCFL objects are append-only. Erasing a version breaks that rule on purpose:
-`artefact` writes a new object with the remaining versions renumbered,
-replaces the old one atomically, and records `erase` in the event log. The
-object stays valid OCFL; its history no longer contains the erased version.
+OCFL objects are append-only. Erasing a version breaks that rule on purpose,
+and so do `seal` and `redact --purge`:
+
+1. `artefact` builds the new object in the storage root's
+   `extensions/artefact-staging/`, hard-linking the content files it keeps;
+2. it moves the old object to `trash-<n>` in the same area, with a note of
+   its place, and renames the new object into that place;
+3. it deletes the trash. Files that only the old object held are gone.
+
+An interruption between the two renames of step 2 is undone at the next
+write to the sphere: the old object goes back to its place. The object stays
+valid OCFL; its history no longer contains the erased versions. Events of
+erased versions keep their place in the log without a version number; the
+others are renumbered.
+
+Deleting a file on APFS does not overwrite its blocks, and local snapshots
+may keep it: the result of `seal` and `erase` lists those copies as not
+covered.
 
 ## 9. Classification
 

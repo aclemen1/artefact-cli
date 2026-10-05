@@ -30,6 +30,7 @@ type Locator func(cfg *config.Config, st *store.Store, id string) (string, strin
 // Run shows the TUI over a store already scoped to the spheres it may use.
 func Run(cfg *config.Config, st *store.Store, locate Locator) error {
 	m := newModel(cfg, st, locate)
+	m.loadPrefs(prefsPath())
 	defer m.Cleanup()
 	_, err := tea.NewProgram(m).Run()
 	return err
@@ -90,6 +91,9 @@ type model struct {
 	toSave      *edit            // edited copy waiting for the confirmation to save it
 	editCard    *store.Card      // card open in the editor
 	planView    *planView        // the plans tree, when shown
+	treeOpen    map[string]bool  // classes open in the plans tree, kept between sessions
+	prefsFile   string           // where the preferences are kept; "" keeps none (tests)
+	saved       prefs            // the preferences as last written
 	classFilter treeRow          // list filtered on a class (plan "" for none)
 	revealed    []string         // decrypted temporary files, deleted on quit
 
@@ -104,7 +108,7 @@ func newModel(cfg *config.Config, st *store.Store, locate Locator) *model {
 	styles := in.Styles()
 	styles.Cursor.Blink = false
 	in.SetStyles(styles)
-	return &model{cfg: cfg, st: st, locate: locate, spheres: st.Spheres, input: in, w: 100, h: 30, copies: map[string]store.CopyState{}, edits: map[string]*edit{}}
+	return &model{cfg: cfg, st: st, locate: locate, spheres: st.Spheres, input: in, w: 100, h: 30, copies: map[string]store.CopyState{}, edits: map[string]*edit{}, treeOpen: map[string]bool{}}
 }
 
 // ------------------------------------------------------------------ data
@@ -228,7 +232,7 @@ func (m *model) refreshCopies() tea.Cmd {
 	}
 }
 
-func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		// A terminal that reports no size still gets a usable layout.
@@ -255,7 +259,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.err != nil {
 				m.setStatus(msg.err.Error(), true)
 			}
-			m.planView.rows = msg.rows
+			m.planView.data = msg.data
+			for _, d := range msg.data {
+				if _, seen := m.planView.open[d.plan.ID+":"]; !seen {
+					m.planView.open[d.plan.ID+":"] = true
+				}
+			}
+			m.planView.rebuild(m.effectiveOrder())
 		}
 		return m, nil
 	case tickMsg:
@@ -339,11 +349,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.legend, m.legendAt = true, 0
 			return m, nil
 		}
-		if m.planView != nil {
-			return m, m.keyPlans(msg)
-		}
 		if m.mode == modeDetail {
 			return m, m.keyDetail(msg)
+		}
+		if m.planView != nil {
+			return m, m.keyPlans(msg)
 		}
 		return m, tea.Batch(m.keyList(msg), m.refreshCopies())
 	}
@@ -466,6 +476,9 @@ func (m *model) keyDetail(k tea.KeyPressMsg) tea.Cmd {
 	switch k.String() {
 	case "q", "esc", "h", "left", "backspace":
 		m.mode, m.detail = modeList, nil
+		if m.planView != nil {
+			return tea.Batch(m.load(), m.loadPlans())
+		}
 		return m.load()
 	case "j", "down":
 		m.scroll++
@@ -806,7 +819,7 @@ func (m *model) View() tea.View {
 
 func (m *model) render() string {
 	var body string
-	if m.planView != nil {
+	if m.planView != nil && m.mode != modeDetail {
 		return m.renderPlans() + "\n" + m.footer()
 	}
 	if m.legend {
@@ -868,8 +881,8 @@ func (m *model) renderList() string {
 		if it.Sealed {
 			lock = sWarn.Render("◆")
 		}
-		row := fmt.Sprintf(" %s%s %s %s %s %s %s %8s  %s",
-			lock, copyMark(m.copies[it.ID]), sMuted.Render(it.ID), pad(tag(it.Sphere), 6), sMuted.Render(it.Date), pad(sMuted.Render("v"+fmt.Sprint(it.Version)), 3),
+		row := fmt.Sprintf("  %s %s   %s   %s  %s  %s  %s %8s   %s",
+			lock, copyMark(m.copies[it.ID]), sMuted.Render(shortID(it.ID)), pad(tag(it.Sphere), 6), sMuted.Render(it.Date), pad(sMuted.Render("v"+fmt.Sprint(it.Version)), 3),
 			pad(sMuted.Render(it.Mime), 24), size(it.Size), sText.Render(it.Title))
 		row = pad(row, m.w)
 		if i == m.sel {
@@ -1114,6 +1127,13 @@ func (m *model) legendLines() []string {
 			{"C", "plans: the classes with their counts; enter lists a class (sub-classes included); C again clears it"},
 			{"c", "classify the selected artefact: pick its class in the plan (your decision, never overwritten)"},
 		}},
+		{"Plans (C)", [][2]string{
+			{"space  l  →", "open a class: its sub-classes, then its artefacts"},
+			{"h  ←", "close the class, or go up to its parent"},
+			{"enter", "on a class, list it (sub-classes included); on an artefact, its detail (esc comes back here)"},
+			{"o", "open the artefact"},
+			{"t  T", "sort the artefacts of each class, or reverse the sort; classes keep the order of their notation"},
+		}},
 		{"Detail", [][2]string{
 			{"o", "open, as in the list"},
 			{"e", "edit the card in $EDITOR: title, date, file name, type, dc, x"},
@@ -1324,9 +1344,9 @@ func (m *model) effectiveOrder() store.Sort {
 
 // nextOrder moves to the next sort key, in its natural direction.
 func (m *model) nextOrder() store.Sort {
-	keys := store.SortKeys[1:]
+	keys := []string{"deposited", "date", "updated", "title", "size"}
 	if m.searched {
-		keys = store.SortKeys
+		keys = append([]string{"relevance"}, keys...)
 	}
 	cur := m.effectiveOrder().Key
 	i := slices.Index(keys, cur)
@@ -1349,4 +1369,14 @@ func (m *model) sortAll() {
 		score = func(it store.ListItem) float64 { return m.scores[it.URI] }
 	}
 	store.SortList(m.all, m.effectiveOrder(), score)
+}
+
+// shortID is the end of a ULID: its start is a timestamp that artefacts
+// deposited together share. The detail view shows the whole id, and the
+// filter (/) finds an artefact by these characters.
+func shortID(id string) string {
+	if len(id) <= 6 {
+		return id
+	}
+	return id[len(id)-6:]
 }

@@ -235,17 +235,45 @@ func TestPlansView(t *testing.T) {
 	m.w, m.h = 120, 30
 	drive(t, m, m.Init())
 	press(t, m, "C")
-	if m.planView == nil || len(m.planView.rows) != 5 {
-		t.Fatalf("plan rows: %+v", m.planView)
+	if m.planView == nil || len(m.planView.rows) != 4 {
+		t.Fatalf("plan rows, classes closed: %+v", m.planView)
+	}
+	press(t, m, "j") // 3 Health
+	press(t, m, "l") // opens it: 3.2 shows
+	press(t, m, "j") // 3.2 Insurance
+	press(t, m, "l") // opens it: the artefact Assura shows
+	rows := m.planView.rows
+	if len(rows) != 6 || rows[3].item == nil || rows[3].item.ID != a.ID || rows[3].branch != "│       └── " {
+		t.Fatalf("open tree: %+v", rows)
 	}
 	counts := map[string]int{}
-	for _, r := range m.planView.rows {
-		counts[r.notation] = r.count
+	for _, r := range rows {
+		if r.item == nil {
+			counts[r.notation] = r.count
+		}
 	}
 	if counts["3"] != 1 || counts["3.2"] != 1 || counts["4"] != 0 || counts[unclassifiedRow] != 1 {
 		t.Errorf("counts %v", counts)
 	}
-	press(t, m, "j") // 3 Health
+	press(t, m, "t") // deposited -> date: the tree keeps its rows
+	if len(m.planView.rows) != 6 || m.order.Key != "date" {
+		t.Fatalf("t in the tree: %s, %d rows", m.order, len(m.planView.rows))
+	}
+	press(t, m, "j")
+	press(t, m, "enter") // the artefact's detail
+	if m.mode != modeDetail {
+		t.Fatal("enter on an artefact must show its detail")
+	}
+	press(t, m, "esc") // back to the tree
+	if m.planView == nil || m.mode == modeDetail {
+		t.Fatal("esc from the detail must return to the tree")
+	}
+	press(t, m, "h") // up to 3.2
+	press(t, m, "h") // closes 3.2
+	press(t, m, "h") // up to 3
+	if r := m.planView.rows[m.planView.sel]; r.notation != "3" || len(m.planView.rows) != 5 {
+		t.Fatalf("after h: on %q, %d rows", r.notation, len(m.planView.rows))
+	}
 	press(t, m, "enter")
 	if l := m.visible(); len(l) != 1 || l[0].ID != a.ID {
 		t.Fatalf("class 3 list: %v", l)

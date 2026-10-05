@@ -665,8 +665,15 @@ CLI, within the spheres given.
 | View | Shows | Keys |
 |---|---|---|
 | list | sphere, date, version, type, size, title; ◆ marks a sealed artefact | `j`/`k`, `g`/`G`, `enter` detail, `o` open, `/` filter (title, file name, id, type), `s` cycles the spheres, `O` orphaned only, `r` refresh, `q` quit |
+| plans (`C`) | the plans as a foldable tree; a class opens on its sub-classes, then its artefacts; counts include sub-classes | `space`/`l` open, `h` close or go up, `enter` lists a class or shows an artefact, `o` open, `t`/`T` sort, `esc` back |
 | detail | card, Dublin Core, extensions, versions, holders, events (newest first) | `o` open, `e` edit the card in `$EDITOR`, `S` seal (type `yes`), `x` erase, `X` erase a held artefact, `j`/`k` scroll, `esc` back |
 
+- The list shows the last 6 characters of each id (the first ones are a
+  timestamp shared by artefacts deposited together); the detail shows it whole.
+- `t` cycles the sort (deposited, date, updated, title, size; relevance after
+  a search) and `T` reverses it.
+- The sort, the sphere and the classes open in the plans tree are kept in
+  `~/.local/state/artefact/tui.json` from one session to the next.
 - `o` opens through `locate`: from a mounted view, else from a cached copy.
 - `e` opens the editable fields (title, date, filename, mime, dc, x) as YAML;
   what changed is saved with one `card` event.

@@ -96,7 +96,7 @@ func init() {
 	spec.Register(&spec.Action{
 		Category: "plans", Name: "classify", Right: "write",
 		Summary:    "Place artefacts in a plan: by its rules, then by a decider, level by level; or record a human decision with --node.",
-		Discussion: "Below classify.threshold (0.8 by default) the walk stops at the parent node and the artefact is pending: `artefact ls --pending` lists it for a human. A human decision (--node) is never overwritten by a decider. A decider sees the card, an excerpt of a text payload, and (acp) the file; of a sealed artefact, the card only.",
+		Discussion: "Below classify.threshold (0.8 by default) the walk stops at the parent node and the artefact is pending: `artefact ls --pending` lists it for a human. A human decision (--node) is never overwritten by a decider. A decider sees the card, an excerpt of the text rendition (or of a text payload), and (acp) the file; of a sealed artefact, the card only.",
 		Params: []spec.Param{
 			{Name: "id", Kind: spec.StringList, Positional: true, Required: true, Help: "Artefact ids or URIs."},
 			{Name: "plan", Kind: spec.String, Required: true, Help: "Plan id."},

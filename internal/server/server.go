@@ -348,6 +348,7 @@ func (h *Server) Serve(ctx context.Context, socketPath, httpAddr string) error {
 	h.views = views
 	defer views.Close()
 	go h.syncLoop(ctx)
+	go h.renderLoop(ctx)
 	nfsListeners, err := h.startNFS(errc)
 	if err != nil {
 		return err
@@ -414,6 +415,34 @@ func (h *Server) Serve(ctx context.Context, socketPath, httpAddr string) error {
 
 // syncLoop keeps every sphere's backends up to date, at start and then every
 // replication.<sphere>.every.
+// renderLoop makes the missing text renditions every few minutes, a batch
+// at a time, so that new deposits become searchable without a command.
+func (h *Server) renderLoop(ctx context.Context) {
+	if a := h.Cfg.Lector.Auto; a != nil && !*a {
+		return
+	}
+	st, err := store.Open(h.Cfg, nil, "artefact-render")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "artefact serve: render: %v\n", err)
+		return
+	}
+	defer st.Close()
+	t := time.NewTicker(5 * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		for _, sp := range h.Cfg.Spheres {
+			if _, err := st.RenderMissing(sp, 50, time.Now().Add(4*time.Minute)); err != nil {
+				fmt.Fprintf(os.Stderr, "artefact serve: render %s: %v\n", sp, err)
+			}
+		}
+	}
+}
+
 func (h *Server) syncLoop(ctx context.Context) {
 	for _, sp := range h.Cfg.Spheres {
 		pol := h.Cfg.ReplicationOf(sp)

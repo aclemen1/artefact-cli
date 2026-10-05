@@ -214,6 +214,7 @@ type PutResult struct {
 	Sealed  bool           `json:"sealed"`
 	Title   string         `json:"title"`
 	Holders []index.Holder `json:"holders"`
+	Render  *RenderResult  `json:"render,omitempty"`
 }
 
 // sealing encrypts what is read from r for recipient, computing on the way

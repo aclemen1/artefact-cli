@@ -27,6 +27,11 @@ type Config struct {
 	Replication map[string]Replication `yaml:"replication,omitempty"`
 	// Classify sets the deciders that place artefacts in the plans.
 	Classify Classify `yaml:"classify,omitempty"`
+	// Lector is the command that turns a file into text (SPEC §10).
+	Lector struct {
+		Command []string `yaml:"command,omitempty" json:"command,omitempty"` // default [lector]
+		Auto    *bool    `yaml:"auto,omitempty" json:"auto,omitempty"`       // serve renders new versions; default true
+	} `yaml:"lector,omitempty"`
 	// RcloneConfig is rclone's configuration file; default ~/.config/artefact/rclone.conf.
 	RcloneConfig string `yaml:"rclone_config,omitempty"`
 

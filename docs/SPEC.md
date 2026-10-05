@@ -169,9 +169,9 @@ backend (local disk by default).
       inventory.json  inventory.json.sha512
       v1/content/payload.pdf
       v2/content/payload.pdf              # redacted version
-      v2/content/renditions/text.md       # from lector (§10)
       extensions/artefact/card.yaml       # mutable card (§3.2)
       extensions/artefact/events.jsonl    # event log (§3.3)
+      extensions/artefact/renditions/v2.md  # text of the current version, from lector (§10)
   pro/
     (same structure)
   .artefact/                              # internal state, outside OCFL
@@ -223,8 +223,8 @@ backend (local disk by default).
 
 | Action | Effect |
 |---|---|
-| `put <file\|-> [--sphere] [--title] [--date] [--seal] [--hold <by>:<ref>] [--card <yaml>] [--key <key>] [--render text] [--render-timeout 30s]` | deposits; idempotent within the sphere; returns `{id, version, status: created\|known, holders, rendition}` |
-| `get <id> [--version vN] [--reveal] [--out <path>] [--rendition <name>]` | writes the payload or a rendition |
+| `put <file\|-> [--sphere] [--title] [--date] [--seal] [--hold <by>:<ref>] [--card <yaml>] [--key <key>] [--render]` | deposits; idempotent within the sphere; returns `{id, version, status: created\|known, holders, render}` |
+| `get <id> [--version vN] [--reveal] [--out <path>] [--rendition text]` | writes the payload or the text rendition |
 | `stat <id>...` | card, versions, holders, renditions, locations and their last fixity check; one or many ids |
 | `which <file\|->  [--sphere]` | without writing anything, the artefact that holds exactly this content: by SHA-256 among clear artefacts, by the sphere's keyed digest among sealed ones; `found: false` otherwise |
 | `search <words> [--sphere] [--state]` | full-text search of titles, file names, cards and text contents (FTS5, accents ignored); a sealed artefact by its card only |
@@ -233,7 +233,7 @@ backend (local disk by default).
 | `card <id> --tag <t> --untag <t>`, `tags`, `ls --tag <t>` | keywords: in the card, searchable and filterable |
 | `archive <id>...`, `unarchive <id>...` | the archived state: kept, replicated, reachable by id and view path, hidden from lists |
 | `ls [--sphere] [--class <plan>:<node>] [--held-by <tool>[:<ref>]] [--orphaned] [--sealed] [--since]` | lists artefacts |
-| `render <id> [--wait]` | asks `lector` for the text rendition again |
+| `render <id>... \| --missing [--sphere] [--limit] [--force]` | asks `lector` for the text rendition (§10) |
 | `du [--sphere]` | count and size of artefacts, payloads and renditions |
 | `card <id> --set <field>=<value> \| --merge <yaml>` | edits the card |
 | `seal <id>` | sealed version, clear versions erased |
@@ -522,18 +522,24 @@ A rendition is a file derived from a payload: its text as Markdown, a
 thumbnail. Text renditions come from `lector`, the converter designed in its
 own project (any file to text, for agents).
 
-- `artefact` asks `lector` for the text of each new version, in the
-  background, and stores the result in the same OCFL version under
-  `renditions/`. `render <id>` asks again, for example after `lector` learns
-  a new format.
-- `put --render text` waits for the rendition up to `--render-timeout` (30 s
-  by default) and returns it with the result. Past the timeout, the result
-  carries `rendition: pending`, and `render <id> --wait` or
-  `get <id> --rendition text` delivers it later. Without `--render`, `put`
-  returns at once.
-- A rendition is erased with its version.
-- A sealed artefact's renditions are sealed. `seal` erases the renditions of
-  the clear versions along with them.
+- A text rendition is derived data, not content: it lives in
+  `extensions/artefact/renditions/v<N>.md`, outside the OCFL versions, so a
+  version stays as it was written. The card's `rendition` records the
+  version, date, length, confidence and `lector` methods, or the error.
+- Only the current version has a rendition. `revise`, `redact` and `seal`
+  drop it; the next render makes the new one.
+- `artefact render <id>...` runs `lector read <payload> --max-chars 200000`.
+  A rendition of the current version is kept unless `--force`.
+  `render --missing [--sphere s] [--limit n]` fills the gaps; one failure
+  does not stop the batch.
+- `put --render` renders before answering and returns the rendition with
+  the result.
+- `serve` renders the missing renditions every 5 minutes, 50 per sphere at a
+  time, unless `lector.auto: false`. `lector.command` overrides the command.
+- `get <id> --rendition text` returns the text.
+- The full-text index and the classification deciders read the rendition
+  first, then the payload of a textual file.
+- A sealed artefact never reaches `lector` and has no rendition.
 
 ## 11. Local server
 
@@ -543,7 +549,6 @@ own project (any file to text, for agents).
 |---|---|
 | `GET /<sphere>/a/<id>[/vN]` | payload, with `Content-Type`, `ETag` = digest, ranges |
 | `GET /<sphere>/a/<id>/card` | the card, JSON |
-| `GET /<sphere>/a/<id>/renditions/<name>` | a rendition |
 | `GET /<sphere>/h/sha256/<hex>` | the payload with this digest |
 | `POST /v1/<action>` | every remote action, same parameters and envelope; a JSON body carries the parameters, and for `put` a non-JSON body is the payload with the parameters in the query |
 | `/mcp` | MCP Streamable HTTP |
@@ -567,7 +572,6 @@ Tree of one sphere's view (the NFS mount root, or `/dav/<sphere>/`):
 ```
 a/<ulid><ext>                                   # current version: the stable path to cite
 a/<ulid>/v<N><ext>                              # fixed versions
-a/<ulid>/renditions/text.md                     # phase 7
 plans/<plan>/<notation> <label>/…/<title><ext> # by class
 plans/<plan>/_unclassified/<title><ext>         # not placed yet, or pending at the top
 ```
@@ -688,7 +692,7 @@ the rights `read`, `write`, `reveal` and `erase`.
 task, mnemo writes each original with `get <id> --out <task dir>/…` (with
 `--reveal` for a sealed one) and deletes the files at the end of the task.
 The text that mnemo writes in an entry's `# Text` section comes from
-`put --render text`, or later from `get <id> --rendition text`.
+`put --render`, or later from `get <id> --rendition text`.
 
 **Holders.** One original is often cited by several concepts. At the end of
 each task, mnemo compares each concept's `sources` before and after, and

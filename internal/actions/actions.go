@@ -97,9 +97,11 @@ func init() {
 			{Name: "card", Kind: spec.String, Help: "YAML of editable card fields to merge: title, date, filename, mime, dc, x."},
 			{Name: "key", Kind: spec.String, Help: "Idempotency key, scoped to the sphere: a second put with this key and the same payload returns the first result."},
 			{Name: "seal", Kind: spec.Bool, Help: "Encrypt the payload with the sphere's age key before anything is written."},
+			{Name: "render", Kind: spec.Bool, Help: "Make the text rendition with lector before answering (unsealed artefacts only)."},
 		},
 		Examples: []string{
 			"artefact put ordonnance-2026-09.pdf",
+			"artefact put facture.pdf --render",
 			"artefact put scan.png --sphere perso --hold mnemo:01K6Z8Q4V7XW3D9JH2M5N8P0QR --key 01K6Z8Q4V7XW3D9JH2M5N8P0QR",
 			"cat note.txt | artefact put - --filename note.txt --title \"Note de séance\" --date 2026-09-18",
 			"artefact put facture.pdf --card 'dc: {creator: Romande Energie}'",
@@ -133,7 +135,12 @@ func init() {
 					}
 					r = fh
 				}
-				return s.Put(r, o)
+				res, err := s.Put(r, o)
+				if err != nil || !ctx.Bool("render") || res.Sealed {
+					return res, err
+				}
+				res.Render, err = s.Render(res.URI, false)
+				return res, err
 			})
 		},
 	})
@@ -145,8 +152,9 @@ func init() {
 			{Name: "version", Kind: spec.String, Help: "Version to read, e.g. v1. Defaults to the current one."},
 			{Name: "out", Kind: spec.String, Help: "File to write, with mode 0600; the result then reports it. Without it, the raw bytes go to standard output."},
 			{Name: "reveal", Kind: spec.Bool, Help: "Decrypt a sealed artefact; the clear text exists only where it is written."},
+			{Name: "rendition", Kind: spec.String, Help: "Read a rendition instead of the payload: text (Markdown made by lector)."},
 		},
-		Examples: []string{"artefact get 01K9B3T0Z6Q8M2C4R7V1X5N9PA --out /tmp/task/scan.pdf", "artefact get artefact://perso/01K9B3T0Z6Q8M2C4R7V1X5N9PA > scan.pdf", "artefact get 01K9B3T0Z6Q8M2C4R7V1X5N9PA --version v1 --out v1.pdf", "artefact get 01K9B3T0Z6Q8M2C4R7V1X5N9PA --reveal --out /tmp/task/codes.png"},
+		Examples: []string{"artefact get 01K9B3T0Z6Q8M2C4R7V1X5N9PA --out /tmp/task/scan.pdf", "artefact get 01K9B3T0Z6Q8M2C4R7V1X5N9PA --rendition text", "artefact get artefact://perso/01K9B3T0Z6Q8M2C4R7V1X5N9PA > scan.pdf", "artefact get 01K9B3T0Z6Q8M2C4R7V1X5N9PA --version v1 --out v1.pdf", "artefact get 01K9B3T0Z6Q8M2C4R7V1X5N9PA --reveal --out /tmp/task/codes.png"},
 		Effects:  []string{"Reads only. With --out, creates or replaces that file."},
 		Run: func(ctx *spec.Context) (any, error) {
 			return run(ctx, func(s *store.Store) (any, error) {
@@ -156,7 +164,22 @@ func init() {
 				if ctx.Str("out") != "" && !localPaths(ctx) {
 					return nil, spec.UserError("this server does not write local files; read the payload without --out")
 				}
-				rc, c, err := s.OpenPayload(ctx.Str("id"), ctx.Str("version"), ctx.Bool("reveal"))
+				var rc io.ReadCloser
+				var c *store.Card
+				var err error
+				switch ctx.Str("rendition") {
+				case "":
+					rc, c, err = s.OpenPayload(ctx.Str("id"), ctx.Str("version"), ctx.Bool("reveal"))
+				case "text":
+					if ctx.Str("version") != "" {
+						return nil, spec.UserError("a rendition exists for the current version only; drop --version")
+					}
+					var t string
+					t, c, err = s.RenditionText(ctx.Str("id"))
+					rc = io.NopCloser(strings.NewReader(t))
+				default:
+					return nil, spec.UserError("--rendition takes text, got %q", ctx.Str("rendition"))
+				}
 				if err != nil {
 					return nil, err
 				}

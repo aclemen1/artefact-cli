@@ -37,7 +37,8 @@ type Card struct {
 	Archived  string           `yaml:"archived,omitempty" json:"archived,omitempty"` // date it was archived
 	Tags      []string         `yaml:"tags,omitempty" json:"tags,omitempty"`
 	DC        map[string]any   `yaml:"dc,omitempty" json:"dc,omitempty"`
-	Embedded  *meta.Embedded   `yaml:"embedded,omitempty" json:"embedded,omitempty"` // read from the file itself
+	Embedded  *meta.Embedded   `yaml:"embedded,omitempty" json:"embedded,omitempty"`   // read from the file itself
+	Rendition *Rendition       `yaml:"rendition,omitempty" json:"rendition,omitempty"` // text made by lector
 	Classes   map[string]Class `yaml:"classes,omitempty" json:"classes,omitempty"`
 	Holders   []index.Holder   `yaml:"holders" json:"holders"`
 	Holds     []any            `yaml:"holds,omitempty" json:"holds,omitempty"`

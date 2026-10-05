@@ -99,7 +99,13 @@ func (s *Store) facts(r *Ref, c *Card) classify.Facts {
 	}
 	if p, err := payloadFile(r.Dir, ""); err == nil {
 		f.File = p
-		if textual(c.Mime) {
+		if t := renditionText(r.Dir, c); t != "" {
+			rs := []rune(t)
+			if len(rs) > 4000 {
+				rs = rs[:4000]
+			}
+			f.Text = string(rs)
+		} else if textual(c.Mime) {
 			if fh, err := os.Open(p); err == nil {
 				buf := make([]byte, 4000)
 				n, _ := io.ReadFull(fh, buf)

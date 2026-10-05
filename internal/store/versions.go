@@ -193,6 +193,9 @@ func (s *Store) Seal(ref string) (*SealResult, error) {
 	}
 	at := now.Format(time.RFC3339)
 	c.Sealed, c.Keyed, c.Size, c.Version, c.Digest = true, keyed, size, 1, headDigest(newInv)
+	if err := dropRenditions(r.Dir, c); err != nil {
+		return nil, err
+	}
 	if err := appendEvent(r.Dir, Event{At: at, Type: "seal", Agent: s.Agent, Outcome: "ok", Version: 1, Detail: map[string]any{"versions_erased": n}}); err != nil {
 		return nil, err
 	}
@@ -284,6 +287,9 @@ func (s *Store) newVersion(ref, file string, purge bool, kind string) (*RedactRe
 	}
 	at := now.Format(time.RFC3339)
 	c.Version, c.Digest, c.Size = len(versions), headDigest(newInv), size
+	if err := dropRenditions(r.Dir, c); err != nil {
+		return nil, err
+	}
 	if c.Sealed {
 		c.Keyed = keyed
 	}

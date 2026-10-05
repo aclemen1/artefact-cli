@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -43,10 +42,14 @@ func searchDoc(objDir string, c *Card) (meta, body string) {
 	if c.Sealed {
 		return strings.Join(m, " "), ""
 	}
+	if t := renditionText(objDir, c); t != "" {
+		if len(t) > maxIndexedText {
+			t = t[:maxIndexedText]
+		}
+		return strings.Join(m, " "), t
+	}
 	src := ""
-	if p := filepath.Join(objDir, "v"+fmt.Sprint(c.Version), "content", "renditions", "text.md"); fileExists(p) {
-		src = p
-	} else if textual(c.Mime) {
+	if textual(c.Mime) {
 		src, _ = payloadFile(objDir, "")
 	}
 	if src != "" {

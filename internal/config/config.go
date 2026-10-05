@@ -74,7 +74,7 @@ func (c *Config) ReplicationOf(sphere string) Replication {
 
 // Classify configures classification (SPEC §9).
 type Classify struct {
-	Decider   string   `yaml:"decider,omitempty" json:"decider,omitempty"`     // rule, openjev or acp; default openjev
+	Decider   string   `yaml:"decider,omitempty" json:"decider,omitempty"`     // rule, openjev, jev or acp; default openjev
 	Threshold float64  `yaml:"threshold,omitempty" json:"threshold,omitempty"` // default 0.8
 	Deciders  Deciders `yaml:"deciders,omitempty" json:"deciders,omitempty"`
 }
@@ -84,6 +84,12 @@ type Deciders struct {
 		URL   string `yaml:"url,omitempty" json:"url,omitempty"` // default http://127.0.0.1:3000
 		Model string `yaml:"model,omitempty" json:"model,omitempty"`
 	} `yaml:"openjev,omitempty" json:"openjev,omitempty"`
+	Jev struct {
+		URL   string `yaml:"url,omitempty" json:"url,omitempty"`     // default https://api.typesafe.ai
+		Model string `yaml:"model,omitempty" json:"model,omitempty"` // default jev-latest
+		// KeyCommand prints the TypeSafe API key, e.g. [security, find-generic-password, -s, typesafe-api-key, -w].
+		KeyCommand []string `yaml:"key_command,omitempty" json:"key_command,omitempty"`
+	} `yaml:"jev,omitempty" json:"jev,omitempty"`
 	ACP struct {
 		Command []string `yaml:"command,omitempty" json:"command,omitempty"` // e.g. [herdr-acp, --agent, claude]
 	} `yaml:"acp,omitempty" json:"acp,omitempty"`

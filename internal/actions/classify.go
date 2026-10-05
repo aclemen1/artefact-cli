@@ -100,7 +100,7 @@ func init() {
 		Params: []spec.Param{
 			{Name: "id", Kind: spec.StringList, Positional: true, Required: true, Help: "Artefact ids or URIs."},
 			{Name: "plan", Kind: spec.String, Required: true, Help: "Plan id."},
-			{Name: "decider", Kind: spec.String, Enum: []string{"rule", "openjev", "acp"}, Help: "Decider; defaults to classify.decider, then openjev. rule uses the plan's rules only."},
+			{Name: "decider", Kind: spec.String, Enum: []string{"rule", "openjev", "jev", "acp"}, Help: "Decider; defaults to classify.decider, then openjev. rule uses the plan's rules only."},
 			{Name: "node", Kind: spec.String, Help: "Human decision: the node's notation; empty string removes the class."},
 		},
 		Examples: []string{"artefact classify 01K9B3T0Z6Q8M2C4R7V1X5N9PA --plan household", "artefact classify 01K9B3T0Z6Q8M2C4R7V1X5N9PA --plan household --decider acp", "artefact classify 01K9B3T0Z6Q8M2C4R7V1X5N9PA --plan household --node 3.2"},

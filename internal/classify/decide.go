@@ -68,13 +68,19 @@ func state(q Question) string {
 
 // OpenJev asks a /v1/systemone server (OpenJev, or Jev with a key).
 type OpenJev struct {
+	Label string // decider name in the records; default openjev
 	URL   string // e.g. http://127.0.0.1:3000
 	Key   string // bearer token, for the hosted Jev
 	Model string
 	HTTP  *http.Client
 }
 
-func (o OpenJev) Name() string { return "openjev" }
+func (o OpenJev) Name() string {
+	if o.Label != "" {
+		return o.Label
+	}
+	return "openjev"
+}
 
 func (o OpenJev) Decide(ctx context.Context, q Question) (Answer, error) {
 	criteria := map[string]string{}
@@ -108,7 +114,7 @@ func (o OpenJev) Decide(ctx context.Context, q Question) (Answer, error) {
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
-		return Answer{}, fmt.Errorf("openjev at %s: %w (is the server running?)", o.URL, err)
+		return Answer{}, fmt.Errorf("%s at %s: %w (is the server reachable?)", o.Name(), o.URL, err)
 	}
 	defer resp.Body.Close()
 	var out struct {
@@ -121,7 +127,10 @@ func (o OpenJev) Decide(ctx context.Context, q Question) (Answer, error) {
 		return Answer{}, fmt.Errorf("openjev: unreadable answer (HTTP %d): %w", resp.StatusCode, err)
 	}
 	if out.Error != nil {
-		return Answer{}, fmt.Errorf("openjev: %s", out.Error.Message)
+		return Answer{}, fmt.Errorf("%s: %s", o.Name(), out.Error.Message)
+	}
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		return Answer{}, fmt.Errorf("%s: HTTP %d", o.Name(), resp.StatusCode)
 	}
 	a, ok := out.Answers["node"]
 	if !ok {

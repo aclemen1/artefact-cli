@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/aclemen1/artefact-cli/internal/classify"
+	"github.com/aclemen1/artefact-cli/internal/config"
 	"github.com/aclemen1/artefact-cli/internal/index"
 )
 
@@ -43,12 +45,41 @@ func (s *Store) Decider(name string) (classify.Decider, error) {
 			url = "http://127.0.0.1:3000"
 		}
 		return classify.OpenJev{URL: url, Model: s.Cfg.Classify.Deciders.OpenJev.Model, Key: os.Getenv("JEV_API_KEY")}, nil
+	case "jev":
+		key := os.Getenv("JEV_API_KEY")
+		if kc := s.Cfg.Classify.Deciders.Jev.KeyCommand; key == "" && len(kc) > 0 {
+			args := make([]string, len(kc))
+			for i, a := range kc {
+				args[i] = config.Expand(a)
+			}
+			out, err := exec.Command(args[0], args[1:]...).Output()
+			if err != nil {
+				return nil, userErr("classify.deciders.jev.key_command failed: %v", err)
+			}
+			key = strings.TrimSpace(string(out))
+		}
+		if key == "" {
+			out, err := exec.Command("security", "find-generic-password", "-s", "artefact", "-a", "jev", "-w").Output()
+			if err != nil {
+				return nil, userErr("the jev decider needs a TypeSafe API key: $JEV_API_KEY, classify.deciders.jev.key_command, or the keychain (service artefact, account jev)")
+			}
+			key = strings.TrimSpace(string(out))
+		}
+		url := s.Cfg.Classify.Deciders.Jev.URL
+		if url == "" {
+			url = "https://api.typesafe.ai"
+		}
+		model := s.Cfg.Classify.Deciders.Jev.Model
+		if model == "" {
+			model = "jev-latest"
+		}
+		return classify.OpenJev{URL: url, Model: model, Key: key, Label: "jev"}, nil
 	case "acp":
 		return classify.ACP{Command: s.Cfg.Classify.Deciders.ACP.Command}, nil
 	case "rule":
 		return nil, nil
 	}
-	return nil, userErr("unknown decider %q; deciders: rule, openjev, acp", name)
+	return nil, userErr("unknown decider %q; deciders: rule, openjev, jev, acp", name)
 }
 
 // facts gathers what a decider may know of an artefact. A sealed artefact

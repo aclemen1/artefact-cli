@@ -21,6 +21,7 @@ import (
 
 	"github.com/aclemen1/artefact-cli/internal/config"
 	"github.com/aclemen1/artefact-cli/internal/index"
+	"github.com/aclemen1/artefact-cli/internal/query"
 	"github.com/aclemen1/artefact-cli/internal/store"
 )
 
@@ -82,20 +83,21 @@ type model struct {
 	plan     *store.Plan
 	force    bool
 
-	copies      map[string]store.CopyState
-	progress    []store.SyncProgress
-	legend      bool
-	legendAt    int
-	reveal      *revealReq       // sealed artefact waiting for the confirmation to open it
-	edits       map[string]*edit // content being edited in an application, by artefact
-	toSave      *edit            // edited copy waiting for the confirmation to save it
-	editCard    *store.Card      // card open in the editor
-	planView    *planView        // the plans tree, when shown
-	treeOpen    map[string]bool  // classes open in the plans tree, kept between sessions
-	prefsFile   string           // where the preferences are kept; "" keeps none (tests)
-	saved       prefs            // the preferences as last written
-	classFilter treeRow          // list filtered on a class (plan "" for none)
-	revealed    []string         // decrypted temporary files, deleted on quit
+	copies       map[string]store.CopyState
+	progress     []store.SyncProgress
+	legend       bool
+	legendAt     int
+	reveal       *revealReq       // sealed artefact waiting for the confirmation to open it
+	edits        map[string]*edit // content being edited in an application, by artefact
+	toSave       *edit            // edited copy waiting for the confirmation to save it
+	editCard     *store.Card      // card open in the editor
+	planView     *planView        // the plans tree, when shown
+	treeOpen     map[string]bool  // classes open in the plans tree, kept between sessions
+	prefsFile    string           // where the preferences are kept; "" keeps none (tests)
+	saved        prefs            // the preferences as last written
+	startInPlans bool             // the last session ended in the plans tree
+	classFilter  treeRow          // list filtered on a class (plan "" for none)
+	revealed     []string         // decrypted temporary files, deleted on quit
 
 	w, h      int
 	status    string
@@ -135,6 +137,7 @@ type (
 	searchMsg struct {
 		items  []store.ListItem
 		scores map[string]float64
+		note   string
 	}
 	tickMsg   struct{}
 	copiesMsg struct {
@@ -189,10 +192,28 @@ func (m *model) visible() []store.ListItem {
 	if m.filter == "" || m.searched {
 		return m.all
 	}
-	f := strings.ToLower(m.filter)
+	// While typing, the plain words filter; operators wait for enter.
+	var words []string
+	for _, w := range strings.Fields(m.filter) {
+		if strings.ContainsAny(w, `:"()`) || strings.HasPrefix(w, "-") || w == "OR" {
+			continue
+		}
+		words = append(words, query.Fold(w))
+	}
+	if len(words) == 0 {
+		return m.all
+	}
 	var out []store.ListItem
 	for _, it := range m.all {
-		if strings.Contains(strings.ToLower(it.Title+" "+it.Filename+" "+it.ID+" "+it.Mime), f) {
+		hay := query.Fold(it.Title + " " + it.Filename + " " + it.ID + " " + it.Mime)
+		keep := true
+		for _, w := range words {
+			if !strings.Contains(hay, w) {
+				keep = false
+				break
+			}
+		}
+		if keep {
 			out = append(out, it)
 		}
 	}
@@ -200,6 +221,9 @@ func (m *model) visible() []store.ListItem {
 }
 
 func (m *model) current() *store.ListItem {
+	if m.planView != nil {
+		return m.treeItem()
+	}
 	l := m.visible()
 	if m.sel < 0 || m.sel >= len(l) {
 		return nil
@@ -212,7 +236,11 @@ func (m *model) setStatus(s string, isErr bool) { m.status, m.statusErr = s, isE
 // ------------------------------------------------------------------ update
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(tea.RequestBackgroundColor, m.load(), tick())
+	cmds := []tea.Cmd{tea.RequestBackgroundColor, m.load(), tick()}
+	if m.startInPlans {
+		cmds = append(cmds, m.openPlans(nil))
+	}
+	return tea.Batch(cmds...)
 }
 
 const refreshEvery = 3 * time.Second
@@ -265,7 +293,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.planView.open[d.plan.ID+":"] = true
 				}
 			}
-			m.planView.rebuild(m.effectiveOrder())
+			m.rebuildTree()
 		}
 		return m, nil
 	case tickMsg:
@@ -288,6 +316,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case searchMsg:
 		m.all, m.searched, m.sel, m.scores = msg.items, true, 0, msg.scores
+		m.setStatus(msg.note, false)
 		m.sortAll()
 		return m, m.refreshCopies()
 	case detailMsg:
@@ -310,6 +339,9 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.reload {
 			cmds = append(cmds, m.load())
+			if m.planView != nil {
+				cmds = append(cmds, m.loadPlans())
+			}
 			if m.mode == modeDetail && m.detail != nil {
 				cmds = append(cmds, m.loadDetail(m.detail.Card.ID))
 			}
@@ -393,7 +425,7 @@ func (m *model) keyList(k tea.KeyPressMsg) tea.Cmd {
 		m.input.Reset()
 		m.input.SetValue(m.filter)
 		m.input.Prompt = "search › "
-		m.input.Placeholder = "words; enter searches titles, cards and text"
+		m.input.Placeholder = `words filter as you type; enter searches text and meaning: "phrase" -word a OR b type:pdf class:banque after:2024 is:pending`
 		return m.input.Focus()
 	case "s":
 		opts := append([]string{""}, m.spheres...)
@@ -550,17 +582,28 @@ func (m *model) keyPrompt(k tea.KeyPressMsg) tea.Cmd {
 					state = "archived"
 				}
 				return func() tea.Msg {
-					hits, err := m.st.Search(val, sphere, 500, state, store.Sort{})
+					res, err := m.st.Find(val, store.FindOptions{Sphere: sphere, Limit: 500, State: state})
 					if err != nil {
 						return listMsg{err: err}
 					}
+					hits := res.Hits
 					items := make([]store.ListItem, len(hits))
 					scores := map[string]float64{}
 					for i, h := range hits {
 						items[i] = h.ListItem
 						scores[h.URI] = h.Score
 					}
-					return searchMsg{items, scores}
+					note := fmt.Sprintf("%d found", len(hits))
+					if res.Semantic {
+						note += " by words and meaning"
+					}
+					if res.Corrected != "" {
+						note += " · searched for: " + res.Corrected
+					}
+					for _, n := range res.Notes {
+						note += " · " + n
+					}
+					return searchMsg{items, scores, note}
 				}
 			}
 			return m.load()
@@ -1077,6 +1120,8 @@ func (m *model) footer() string {
 	switch {
 	case m.prompt != promptNone:
 		help = m.input.View()
+	case m.planView != nil && m.mode != modeDetail && m.planView.assign == nil:
+		help = helpLine("space", "open/close", "enter", "list class/detail", "o", "open", "e/E", "edit", "c", "classify", "/", "search", "t/T", "sort", "s", "sphere", "esc", "back", "?", "keys")
 	case m.mode == modeDetail:
 		help = helpLine("o", "open", "E", "edit content", "e", "edit card", "a", "archive", "S", "seal", "x", "erase", "esc", "back", "?", "keys")
 	default:
@@ -1115,7 +1160,10 @@ func (m *model) legendLines() []string {
 			{"j k  ↑ ↓", "move"}, {"g  G", "top, end"}, {"ctrl+d  ctrl+u", "page down, up"},
 			{"enter  l", "detail of the artefact"},
 			{"o", "open: a text file in $EDITOR, any other in its application; a sealed one after yes, decrypted into a temporary file deleted on quit"},
-			{"/", "search: live filter while typing; enter searches titles, cards and text"},
+			{"/", "search: the words filter while typing (accents ignored); enter searches titles, cards and texts, by words and by meaning"},
+			{"", `  "phrase"  -word  a OR b  x AROUND(5) y  title: file: text: card:`},
+			{"", "  type:pdf|image|text|docx  class:4.2|banque  plan:  tag:  -tag:  sphere:"},
+			{"", "  after:2024-03  before:2025  year:2023  is:sealed|archived|active|pending|orphaned|classified|unclassified  -is:"},
 			{"r", "refresh, and clear the search"},
 			{"s", "sphere: all, then each sphere in turn"},
 			{"O", "orphaned only: artefacts no tool holds"},

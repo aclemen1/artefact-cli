@@ -17,12 +17,16 @@ type prefs struct {
 	Sort   string   `json:"sort,omitempty"`   // key:asc|desc; "" for the default
 	Sphere string   `json:"sphere,omitempty"` // "" for every sphere
 	Open   []string `json:"open,omitempty"`   // classes open in the plans tree
+	View   string   `json:"view,omitempty"`   // "plans" when the plans tree was shown
 }
 
 func prefsPath() string { return config.Expand("~/.local/state/artefact/tui.json") }
 
 func (m *model) currentPrefs() prefs {
 	p := prefs{Sphere: m.sphere}
+	if pv := m.planView; pv != nil && (pv.assign == nil || pv.parent != nil) {
+		p.View = "plans"
+	}
 	if m.order.Key != "" {
 		p.Sort = m.order.String()
 	}
@@ -56,7 +60,9 @@ func (m *model) loadPrefs(path string) {
 	for _, k := range p.Open {
 		m.treeOpen[k] = true
 	}
+	m.startInPlans = p.View == "plans"
 	m.saved = m.currentPrefs()
+	m.saved.View = p.View // the tree opens at Init; the file already says so
 }
 
 // savePrefs writes the preferences when they changed.
@@ -65,7 +71,7 @@ func (m *model) savePrefs() {
 		return
 	}
 	p := m.currentPrefs()
-	if slices.Equal(p.Open, m.saved.Open) && p.Sort == m.saved.Sort && p.Sphere == m.saved.Sphere {
+	if slices.Equal(p.Open, m.saved.Open) && p.Sort == m.saved.Sort && p.Sphere == m.saved.Sphere && p.View == m.saved.View {
 		return
 	}
 	b, _ := json.MarshalIndent(p, "", "  ")
@@ -81,8 +87,12 @@ func (m *model) savePrefs() {
 // Update handles a message, then keeps the preferences a key may have changed.
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	mm, cmd := m.update(msg)
-	if _, ok := msg.(tea.KeyPressMsg); ok {
+	switch msg.(type) {
+	case tea.KeyPressMsg:
 		m.savePrefs()
+		m.rebuildTree() // the filter, the sphere or the sort may have changed
+	case listMsg, searchMsg:
+		m.rebuildTree()
 	}
 	return mm, cmd
 }

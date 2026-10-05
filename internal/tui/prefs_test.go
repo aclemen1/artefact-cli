@@ -32,13 +32,19 @@ func TestPrefsSurviveARestart(t *testing.T) {
 
 	n := newModel(cfg, st, locate)
 	n.loadPrefs(path)
-	if n.sphere != "perso" || n.order.String() != "date:asc" || !n.treeOpen["h:3"] {
+	if n.sphere != "perso" || n.order.String() != "date:asc" || !n.treeOpen["h:3"] || !n.startInPlans {
 		t.Fatalf("restored: sphere %q, sort %s, open %v", n.sphere, n.order, n.treeOpen)
 	}
 	n.w, n.h = 120, 30
 	drive(t, n, n.Init())
-	press(t, n, "C")
-	if len(n.planView.rows) != 4 { // Household, 3, 3.2, unclassified
+	if n.planView == nil || len(n.planView.rows) != 4 { // Household, 3, 3.2, unclassified
 		t.Fatalf("tree not reopened: %+v", n.planView.rows)
+	}
+
+	press(t, n, "esc") // back to the list: the next session starts there
+	o := newModel(cfg, st, locate)
+	o.loadPrefs(path)
+	if o.startInPlans {
+		t.Error("the list was the last view, not the plans")
 	}
 }

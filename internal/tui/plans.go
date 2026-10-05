@@ -6,7 +6,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/aclemen1/artefact-cli/internal/classify"
-	"github.com/aclemen1/artefact-cli/internal/index"
 	"github.com/aclemen1/artefact-cli/internal/store"
 )
 
@@ -24,6 +23,7 @@ type treeRow struct {
 	count    int
 	branch   string          // tree lines before the label: "│   ├── "
 	kids     bool            // the row can open
+	opened   bool            // its children are shown
 	item     *store.ListItem // an artefact leaf
 }
 
@@ -36,12 +36,12 @@ func (r treeRow) key() string {
 
 const unclassifiedRow = "_unclassified"
 
-// planData is what the tree is drawn from.
+// planData is what the tree is drawn from: a plan, and where each artefact
+// of its sphere sits in it. The artefacts themselves are the list's, with its
+// filters and search, so that the tree and the list show the same ones.
 type planData struct {
-	plan  *classify.Plan
-	items map[string][]store.ListItem // by node; "" for the unplaced
-	own   map[string]int
-	total int
+	plan    *classify.Plan
+	members map[string]string // artefact id → notation; absent or "" when not placed
 }
 
 type planView struct {
@@ -51,6 +51,7 @@ type planView struct {
 	sel    int
 	top    int
 	assign *store.ListItem // nil: browse
+	parent *planView       // the browsing tree an assignment came from
 }
 
 type plansMsg struct {
@@ -58,16 +59,8 @@ type plansMsg struct {
 	err  error
 }
 
-// loadPlans reads the plans of the spheres in view and where each artefact sits.
+// loadPlans reads every plan of the granted spheres and where each artefact sits.
 func (m *model) loadPlans() tea.Cmd {
-	sphere := m.sphere
-	if m.planView != nil && m.planView.assign != nil {
-		sphere = m.planView.assign.Sphere
-	}
-	state := "active"
-	if m.archived {
-		state = "archived"
-	}
 	return func() tea.Msg {
 		plans, err := m.st.Plans().List()
 		if err != nil {
@@ -75,24 +68,16 @@ func (m *model) loadPlans() tea.Cmd {
 		}
 		var out []planData
 		for _, p := range plans {
-			if (sphere != "" && p.Sphere != sphere) || !contains(m.spheres, p.Sphere) {
+			if !contains(m.spheres, p.Sphere) {
 				continue
 			}
 			members, err := m.st.ClassMembers(p.Sphere, p.ID)
 			if err != nil {
 				return plansMsg{err: err}
 			}
-			items, err := m.st.List(p.Sphere, index.Filter{State: state})
-			if err != nil {
-				return plansMsg{err: err}
-			}
-			d := planData{plan: p, items: map[string][]store.ListItem{}, own: map[string]int{}, total: len(items)}
-			for _, it := range items {
-				node := members[it.ID].Node
-				d.items[node] = append(d.items[node], it)
-				if node != "" {
-					d.own[node]++
-				}
+			d := planData{plan: p, members: map[string]string{}}
+			for id, c := range members {
+				d.members[id] = c.Node
 			}
 			out = append(out, d)
 		}
@@ -100,67 +85,97 @@ func (m *model) loadPlans() tea.Cmd {
 	}
 }
 
-// rebuild lays out the visible rows from the data and the open classes,
-// keeping the selection on the same row when it is still shown.
-func (pv *planView) rebuild(order store.Sort) {
+// rebuildTree lays out the visible rows from the plans, the list's artefacts
+// and the open classes, keeping the selection on the same row when it is
+// still shown. While a filter or a search is on, the classes that hold a
+// match open by themselves.
+func (m *model) rebuildTree() {
+	pv := m.planView
+	if pv == nil {
+		return
+	}
 	selKey := ""
 	if pv.sel < len(pv.rows) {
 		selKey = pv.rows[pv.sel].key()
 	}
+	sphere := m.sphere
+	if pv.assign != nil {
+		sphere = pv.assign.Sphere
+	}
+	filtering := m.filter != "" && pv.assign == nil
+	visible := m.visible()
 	var rows []treeRow
-	leaves := func(d planData, node string) []store.ListItem {
-		if pv.assign != nil {
-			return nil
-		}
-		l := append([]store.ListItem(nil), d.items[node]...)
-		store.SortList(l, order, nil)
-		return l
-	}
-	var count func(d planData, n *classify.Node) int
-	count = func(d planData, n *classify.Node) int {
-		c := d.own[n.Notation]
-		for _, k := range n.Children {
-			c += count(d, k)
-		}
-		return c
-	}
 	for _, d := range pv.data {
 		p := d.plan
-		placed := d.total - len(d.items[""])
-		head := treeRow{plan: p.ID, sphere: p.Sphere, label: p.Title, count: placed, kids: true}
-		rows = append(rows, head)
-		if !pv.open[head.key()] {
+		if sphere != "" && p.Sphere != sphere {
 			continue
 		}
-		var walk func(ns []*classify.Node, items []store.ListItem, indent string)
-		walk = func(ns []*classify.Node, items []store.ListItem, indent string) {
-			n := len(ns) + len(items)
+		items := map[string][]store.ListItem{}
+		own := map[string]int{}
+		total := 0
+		for _, it := range visible {
+			if it.Sphere != p.Sphere {
+				continue
+			}
+			total++
+			node := d.members[it.ID]
+			if node == "" {
+				node = unclassifiedRow
+			}
+			items[node] = append(items[node], it)
+			own[node]++
+		}
+		var count func(n *classify.Node) int
+		count = func(n *classify.Node) int {
+			c := own[n.Notation]
+			for _, k := range n.Children {
+				c += count(k)
+			}
+			return c
+		}
+		isOpen := func(key string, c int) bool { return pv.open[key] || (filtering && c > 0) }
+		head := treeRow{plan: p.ID, sphere: p.Sphere, label: p.Title, count: total - own[unclassifiedRow], kids: true}
+		head.opened = isOpen(head.key(), total)
+		rows = append(rows, head)
+		if !head.opened {
+			continue
+		}
+		var walk func(ns []*classify.Node, leaves []store.ListItem, indent string)
+		walk = func(ns []*classify.Node, leaves []store.ListItem, indent string) {
+			n := len(ns) + len(leaves)
 			for k, node := range ns {
 				branch, next := "├── ", "│   "
 				if k == n-1 {
 					branch, next = "└── ", "    "
 				}
-				own := leaves(d, node.Notation)
+				var mine []store.ListItem
+				if pv.assign == nil {
+					mine = append(mine, items[node.Notation]...)
+					store.SortList(mine, m.effectiveOrder(), m.score())
+				}
+				c := count(node)
 				r := treeRow{plan: p.ID, sphere: p.Sphere, notation: node.Notation, label: node.Label,
-					count: count(d, node), branch: indent + branch, kids: len(node.Children)+len(own) > 0}
+					count: c, branch: indent + branch, kids: len(node.Children)+len(mine) > 0}
+				if filtering && c == 0 {
+					continue
+				}
+				r.opened = r.kids && isOpen(r.key(), c)
 				rows = append(rows, r)
-				if pv.open[r.key()] {
-					walk(node.Children, own, indent+next)
+				if r.opened {
+					walk(node.Children, mine, indent+next)
 				}
 			}
-			for k := range items {
+			for k := range leaves {
 				branch := "├── "
 				if len(ns)+k == n-1 {
 					branch = "└── "
 				}
-				it := items[k]
+				it := leaves[k]
 				rows = append(rows, treeRow{plan: p.ID, sphere: p.Sphere, label: it.Title, branch: indent + branch, item: &it})
 			}
 		}
 		// unclassified closes the plan's tree, as a last top-level class.
 		nodes := append(append([]*classify.Node(nil), p.Nodes...), &classify.Node{Notation: unclassifiedRow, Label: "unclassified"})
-		d.own[unclassifiedRow] = len(d.items[""])
-		d.items[unclassifiedRow] = d.items[""]
 		walk(nodes, nil, "")
 	}
 	pv.rows = rows
@@ -171,6 +186,23 @@ func (pv *planView) rebuild(order store.Sort) {
 			break
 		}
 	}
+}
+
+// score gives the relevance of a search result, for the relevance sort.
+func (m *model) score() func(store.ListItem) float64 {
+	if !m.searched {
+		return nil
+	}
+	return func(it store.ListItem) float64 { return m.scores[it.URI] }
+}
+
+// treeItem is the artefact selected in the browsing tree, if any.
+func (m *model) treeItem() *store.ListItem {
+	pv := m.planView
+	if pv == nil || pv.assign != nil || pv.sel >= len(pv.rows) {
+		return nil
+	}
+	return pv.rows[pv.sel].item
 }
 
 func contains(l []string, s string) bool {
@@ -184,7 +216,14 @@ func contains(l []string, s string) bool {
 
 // openPlans shows the tree; assign names the artefact to place, or nil.
 func (m *model) openPlans(assign *store.ListItem) tea.Cmd {
-	m.planView = &planView{assign: assign, open: m.treeOpen}
+	pv := &planView{assign: assign, open: m.treeOpen}
+	if assign != nil && m.planView != nil && m.planView.assign == nil {
+		pv.parent = m.planView
+		pv.data = m.planView.data
+		m.planView = pv
+		m.rebuildTree()
+	}
+	m.planView = pv
 	return m.loadPlans()
 }
 
@@ -198,13 +237,26 @@ func (m *model) keyPlans(k tea.KeyPressMsg) tea.Cmd {
 	toggle := func(open bool) {
 		if r != nil && r.kids {
 			pv.open[r.key()] = open
-			pv.rebuild(m.effectiveOrder())
+			m.rebuildTree()
 		}
 	}
 	switch k.String() {
-	case "esc", "q", "C":
-		m.planView = nil
+	case "esc", "C":
+		if m.filter != "" && pv.assign == nil && k.String() == "esc" {
+			m.filter, m.searched = "", false
+			m.rebuildTree()
+			return m.load()
+		}
+		m.planView = pv.parent
+		m.rebuildTree()
 		return nil
+	case "q":
+		if pv.assign != nil {
+			m.planView = pv.parent
+			m.rebuildTree()
+			return nil
+		}
+		return tea.Quit
 	case "j", "down":
 		pv.sel = min(pv.sel+1, max(0, len(pv.rows)-1))
 	case "k", "up":
@@ -219,14 +271,14 @@ func (m *model) keyPlans(k tea.KeyPressMsg) tea.Cmd {
 		pv.sel = max(0, pv.sel-m.h/2)
 	case "space", "tab":
 		if r != nil {
-			toggle(!pv.open[r.key()])
+			toggle(!r.opened)
 		}
 	case "l", "right":
 		switch {
 		case r == nil:
 		case r.item != nil:
 			return m.showDetail(*r.item)
-		case !pv.open[r.key()]:
+		case !r.opened:
 			toggle(true)
 		case pv.sel+1 < len(pv.rows):
 			pv.sel++
@@ -235,15 +287,11 @@ func (m *model) keyPlans(k tea.KeyPressMsg) tea.Cmd {
 		if r == nil {
 			return nil
 		}
-		if r.item == nil && pv.open[r.key()] {
+		if r.item == nil && r.opened && pv.open[r.key()] {
 			toggle(false)
 			return nil
 		}
 		pv.sel = parentRow(pv.rows, pv.sel)
-	case "o":
-		if r != nil && r.item != nil {
-			return m.open(r.item.URI, r.item.Mime)
-		}
 	case "t", "T":
 		o := m.nextOrder()
 		if k.String() == "T" {
@@ -252,7 +300,7 @@ func (m *model) keyPlans(k tea.KeyPressMsg) tea.Cmd {
 		}
 		m.order = o
 		m.sortAll()
-		pv.rebuild(m.effectiveOrder())
+		m.rebuildTree()
 		m.setStatus("artefacts sorted by "+m.orderLabel(), false)
 	case "enter":
 		if r == nil {
@@ -267,6 +315,11 @@ func (m *model) keyPlans(k tea.KeyPressMsg) tea.Cmd {
 		m.planView = nil
 		m.classFilter, m.sel, m.filter, m.searched = *r, 0, "", false
 		return m.load()
+	default:
+		// Every other key does what it does in the list, on the selected artefact.
+		if pv.assign == nil {
+			return tea.Batch(m.keyList(k), m.refreshCopies())
+		}
 	}
 	return nil
 }
@@ -297,7 +350,7 @@ func (m *model) assignClass(it store.ListItem, r treeRow) tea.Cmd {
 		m.setStatus("pick a class of the plan, or unclassified", true)
 		return nil
 	}
-	m.planView = nil
+	m.planView = m.planView.parent
 	return func() tea.Msg {
 		res, err := m.st.SetClass(it.URI, r.plan, node, who())
 		if err != nil {
@@ -312,14 +365,13 @@ func (m *model) assignClass(it store.ListItem, r treeRow) tea.Cmd {
 
 func (m *model) renderPlans() string {
 	pv := m.planView
-	title := "Plans"
-	hint := "  ·  space opens  ·  enter lists the class, or shows the artefact  ·  o opens it  ·  t/T sort: " + m.orderLabel() + "  ·  esc back"
+	var lines []string
 	if pv.assign != nil {
-		title = "Place " + pv.assign.Title
-		hint = "  ·  space opens  ·  enter places it there  ·  esc back"
+		lines = []string{sTitle.Render("Place "+pv.assign.Title) + sMuted.Render("  ·  space opens  ·  enter places it there  ·  esc back"), ""}
+	} else {
+		lines = []string{pad(m.header(), m.w), sMuted.Render("  plans  ·  space opens a class  ·  enter lists the class, or shows the artefact  ·  every key of the list works here"), ""}
 	}
-	lines := []string{sTitle.Render(title) + sMuted.Render(hint), ""}
-	h := m.h - 4
+	h := m.h - 3 - len(lines)
 	if pv.sel < pv.top {
 		pv.top = pv.sel
 	}
@@ -334,7 +386,7 @@ func (m *model) renderPlans() string {
 		fold := "  "
 		if r.kids {
 			fold = "▸ "
-			if pv.open[r.key()] {
+			if r.opened {
 				fold = "▾ "
 			}
 		}

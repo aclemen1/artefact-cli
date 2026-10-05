@@ -302,3 +302,59 @@ func TestPlansView(t *testing.T) {
 		t.Error("e from the list must open the card editor")
 	}
 }
+
+func TestTreeDoesWhatTheListDoes(t *testing.T) {
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}, DefaultSphere: "perso"}
+	st, _ := store.Open(cfg, nil, "test")
+	defer st.Close()
+	st.Init()
+	st.Plans().Save([]byte("id: h\ntitle: Household\nsphere: perso\nnodes:\n  - notation: \"3\"\n    label: Health\n  - notation: \"4\"\n    label: Housing\n"), false)
+	a, _ := st.Put(strings.NewReader("a"), store.PutOptions{Filename: "a.pdf", Title: "Assura"})
+	st.Put(strings.NewReader("b"), store.PutOptions{Filename: "b.pdf", Title: "Bail"})
+	st.SetClass(a.ID, "h", "3", "alain")
+	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
+	m.w, m.h = 120, 30
+	drive(t, m, m.Init())
+	press(t, m, "C")
+
+	press(t, m, "/")
+	typeText(t, m, "assu")
+	rows := m.planView.rows // Household, 3 (opened by the match), Assura
+	if len(rows) != 3 || rows[2].item == nil || rows[2].item.ID != a.ID {
+		t.Fatalf("filtered tree: %+v", rows)
+	}
+	press(t, m, "enter") // full-text search, still in the tree
+	if m.planView == nil || !m.searched || len(m.planView.rows) != 3 {
+		t.Fatalf("search in the tree: %+v", m.planView)
+	}
+	m.planView.sel = 2
+	press(t, m, "e")
+	if m.editCard == nil || m.editCard.ID != a.ID {
+		t.Fatal("e in the tree must edit the selected artefact's card")
+	}
+	m.editCard = nil
+	press(t, m, "esc") // clears the filter, stays in the tree
+	if m.planView == nil || m.filter != "" || len(m.planView.rows) != 4 {
+		t.Fatalf("after esc: %+v", m.planView)
+	}
+
+	press(t, m, "j")
+	press(t, m, "l") // opens 3 Health
+	press(t, m, "j") // Assura
+	press(t, m, "c") // place it elsewhere
+	if m.planView == nil || m.planView.assign == nil {
+		t.Fatal("c in the tree must open the class picker")
+	}
+	for i, r := range m.planView.rows {
+		if r.notation == "4" {
+			m.planView.sel = i
+		}
+	}
+	press(t, m, "enter")
+	if m.planView == nil || m.planView.assign != nil {
+		t.Fatalf("after placing, the browsing tree comes back: %+v", m.planView)
+	}
+	if l, _ := st.List("perso", indexFilterClass("h:4")); len(l) != 1 {
+		t.Errorf("Assura not placed in 4: %v (%q)", l, m.status)
+	}
+}

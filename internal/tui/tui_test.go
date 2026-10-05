@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -140,5 +142,135 @@ func TestTUI(t *testing.T) {
 	press(t, m, "x")
 	if m.plan != nil || !m.statusErr {
 		t.Errorf("x on a held artefact must refuse: %q", m.status)
+	}
+}
+
+func TestOpenSealedAsksThenCleansUp(t *testing.T) {
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}, DefaultSphere: "perso"}
+	st, _ := store.Open(cfg, nil, "test")
+	defer st.Close()
+	st.Init()
+	id, rcp, _ := keys.Generate()
+	cfg.Keys = map[string]string{"perso": rcp}
+	st.Keys = keys.Memory{"perso": id}
+	a, _ := st.Put(strings.NewReader("TOPSECRET"), store.PutOptions{Filename: "codes.txt", Seal: true})
+	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
+	m.w, m.h = 120, 30
+	drive(t, m, m.Init())
+	press(t, m, "o")
+	if m.prompt != promptReveal {
+		t.Fatalf("no confirmation asked: %q", m.status)
+	}
+	typeText(t, m, "no")
+	press(t, m, "enter")
+	if len(m.revealed) != 0 {
+		t.Fatal("decrypted without yes")
+	}
+	press(t, m, "o")
+	typeText(t, m, "yes")
+	press(t, m, "enter")
+	if len(m.revealed) != 1 {
+		t.Fatalf("not decrypted: %q", m.status)
+	}
+	p := m.revealed[0] + "/codes.txt"
+	b, err := os.ReadFile(p)
+	fi, _ := os.Stat(p)
+	if err != nil || string(b) != "TOPSECRET" || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("decrypted copy: %q %v %v", b, err, fi.Mode())
+	}
+	m.Cleanup()
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Error("decrypted copy left after cleanup")
+	}
+	_ = a
+}
+
+func TestEditContent(t *testing.T) {
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}, DefaultSphere: "perso"}
+	st, _ := store.Open(cfg, nil, "test")
+	defer st.Close()
+	st.Init()
+	a, _ := st.Put(strings.NewReader("draft"), store.PutOptions{Filename: "note.md"})
+	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
+	m.w, m.h = 120, 30
+	drive(t, m, m.Init())
+	press(t, m, "enter")
+	press(t, m, "E")
+	e := m.edits[a.ID]
+	if e == nil {
+		t.Fatalf("no working copy: %q", m.status)
+	}
+	os.WriteFile(e.path, []byte("final"), 0o600)
+	_, cmd := m.Update(editedContentMsg{id: a.ID})
+	drive(t, m, cmd)
+	if m.prompt != promptRevise {
+		t.Fatalf("no save asked: %q", m.status)
+	}
+	typeText(t, m, "yes")
+	press(t, m, "enter")
+	rc, _, _ := st.OpenPayload(a.ID, "", false)
+	b := make([]byte, 5)
+	rc.Read(b)
+	rc.Close()
+	if string(b) != "final" {
+		t.Errorf("content %q, status %q", b, m.status)
+	}
+	stat, _, _ := st.Stat([]string{a.ID}, false)
+	if len(stat[0].Versions) != 2 {
+		t.Errorf("versions %d", len(stat[0].Versions))
+	}
+	os.RemoveAll(filepath.Dir(e.path))
+}
+
+func TestPlansView(t *testing.T) {
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}, DefaultSphere: "perso"}
+	st, _ := store.Open(cfg, nil, "test")
+	defer st.Close()
+	st.Init()
+	st.Plans().Save([]byte("id: h\ntitle: Household\nsphere: perso\nnodes:\n  - notation: \"3\"\n    label: Health\n    children:\n      - notation: \"3.2\"\n        label: Insurance\n  - notation: \"4\"\n    label: Housing\n"), false)
+	a, _ := st.Put(strings.NewReader("a"), store.PutOptions{Filename: "a.pdf", Title: "Assura"})
+	st.Put(strings.NewReader("b"), store.PutOptions{Filename: "b.pdf", Title: "Bail"})
+	st.SetClass(a.ID, "h", "3.2", "alain")
+	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
+	m.w, m.h = 120, 30
+	drive(t, m, m.Init())
+	press(t, m, "C")
+	if m.planView == nil || len(m.planView.rows) != 5 {
+		t.Fatalf("plan rows: %+v", m.planView)
+	}
+	counts := map[string]int{}
+	for _, r := range m.planView.rows {
+		counts[r.notation] = r.count
+	}
+	if counts["3"] != 1 || counts["3.2"] != 1 || counts["4"] != 0 || counts[unclassifiedRow] != 1 {
+		t.Errorf("counts %v", counts)
+	}
+	press(t, m, "j") // 3 Health
+	press(t, m, "enter")
+	if l := m.visible(); len(l) != 1 || l[0].ID != a.ID {
+		t.Fatalf("class 3 list: %v", l)
+	}
+	press(t, m, "C") // clears the class filter
+	if len(m.visible()) != 2 {
+		t.Fatalf("after clearing: %d", len(m.visible()))
+	}
+	for i, it := range m.visible() {
+		if it.Title == "Bail" {
+			m.sel = i
+		}
+	}
+	press(t, m, "c")
+	for i, r := range m.planView.rows {
+		if r.notation == "4" {
+			m.planView.sel = i
+		}
+	}
+	press(t, m, "enter")
+	if l, _ := st.List("perso", indexFilterClass("h:4")); len(l) != 1 {
+		t.Errorf("Bail not placed in 4: %v (%q)", l, m.status)
+	}
+	press(t, m, "e")
+	if m.editCard == nil {
+		t.Error("e from the list must open the card editor")
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/aclemen1/artefact-cli/internal/index"
+	"github.com/aclemen1/artefact-cli/internal/meta"
 )
 
 // Card is an artefact's metadata (SPEC §3.2). The core fields are written by
@@ -34,7 +35,9 @@ type Card struct {
 	Deposited string           `yaml:"deposited" json:"deposited"`
 	Updated   string           `yaml:"updated" json:"updated"`
 	Archived  string           `yaml:"archived,omitempty" json:"archived,omitempty"` // date it was archived
+	Tags      []string         `yaml:"tags,omitempty" json:"tags,omitempty"`
 	DC        map[string]any   `yaml:"dc,omitempty" json:"dc,omitempty"`
+	Embedded  *meta.Embedded   `yaml:"embedded,omitempty" json:"embedded,omitempty"` // read from the file itself
 	Classes   map[string]Class `yaml:"classes,omitempty" json:"classes,omitempty"`
 	Holders   []index.Holder   `yaml:"holders" json:"holders"`
 	Holds     []any            `yaml:"holds,omitempty" json:"holds,omitempty"`
@@ -69,7 +72,7 @@ const (
 var dateRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
 // Editable lists the card fields `card --set` and `--merge` may change.
-var Editable = []string{"title", "date", "filename", "mime", "dc.<term>", "x.<namespace>.<key>"}
+var Editable = []string{"title", "date", "filename", "mime", "tags", "dc.<term>", "x.<namespace>.<key>"}
 
 func readCard(objDir string) (*Card, error) {
 	b, err := os.ReadFile(filepath.Join(objDir, extDir, cardFile))
@@ -191,6 +194,9 @@ func (c *Card) set(field, value string) error {
 		c.Filename = filepath.Base(value)
 	case field == "mime":
 		c.Mime = value
+	case field == "tags":
+		c.Tags = nil
+		c.addTags(strings.Split(value, ","))
 	case strings.HasPrefix(field, "dc.") && len(field) > 3:
 		if c.DC == nil {
 			c.DC = map[string]any{}
@@ -245,6 +251,15 @@ func (c *Card) merge(doc string) error {
 			if err := c.set(k, s); err != nil {
 				return err
 			}
+		case "tags":
+			l, ok := v.([]any)
+			if !ok {
+				return fmt.Errorf("tags takes a list, got %v", v)
+			}
+			c.Tags = nil
+			for _, x := range l {
+				c.addTags([]string{fmt.Sprint(x)})
+			}
 		case "dc":
 			dm, ok := v.(map[string]any)
 			if !ok {
@@ -281,3 +296,19 @@ func (c *Card) merge(doc string) error {
 	}
 	return nil
 }
+
+// addTags adds tags once each, trimmed, in the order given.
+func (c *Card) addTags(tags []string) {
+	for _, t := range tags {
+		t = strings.TrimSpace(t)
+		if t != "" && !slices.Contains(c.Tags, t) {
+			c.Tags = append(c.Tags, t)
+		}
+	}
+}
+
+func (c *Card) removeTags(tags []string) {
+	c.Tags = slices.DeleteFunc(c.Tags, func(t string) bool { return slices.Contains(tags, t) })
+}
+
+func fmtAny(v any) string { return fmt.Sprint(v) }

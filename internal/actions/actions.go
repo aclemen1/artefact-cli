@@ -214,6 +214,7 @@ func init() {
 			{Name: "class", Kind: spec.String, Help: "Keep the artefacts placed in plan, or in plan:notation and below."},
 			{Name: "pending", Kind: spec.Bool, Help: "Keep the artefacts whose classification waits for a human (in --class's plan when given)."},
 			{Name: "state", Kind: spec.String, Default: "active", Enum: []string{"active", "archived", "all"}, Help: "active hides the archived artefacts; archived shows them only; all shows both."},
+			{Name: "tag", Kind: spec.String, Help: "Keep the artefacts with this tag."},
 			{Name: "since", Kind: spec.String, Help: "Keep the artefacts deposited on or after this date (YYYY-MM-DD)."},
 			{Name: "limit", Kind: spec.String, Default: "100", Help: "Maximum number of artefacts; 0 for all.", Aliases: []string{"n"}},
 		},
@@ -225,7 +226,7 @@ func init() {
 				return nil, spec.UserError("--limit takes a number, got %q. Example: artefact ls --limit 20", ctx.Str("limit"))
 			}
 			return run(ctx, func(s *store.Store) (any, error) {
-				return s.List(ctx.Str("sphere"), index.Filter{HeldBy: ctx.Str("held-by"), Class: ctx.Str("class"), Pending: ctx.Bool("pending"), State: stateFilter(ctx.Str("state")), Orphaned: ctx.Bool("orphaned"), Since: ctx.Str("since"), Limit: limit})
+				return s.List(ctx.Str("sphere"), index.Filter{HeldBy: ctx.Str("held-by"), Class: ctx.Str("class"), Pending: ctx.Bool("pending"), State: stateFilter(ctx.Str("state")), Tag: ctx.Str("tag"), Orphaned: ctx.Bool("orphaned"), Since: ctx.Str("since"), Limit: limit})
 			})
 		},
 		Text: func(w io.Writer, r any) {
@@ -242,11 +243,24 @@ func init() {
 			{Name: "id", Kind: spec.String, Positional: true, Required: true, Help: "Artefact id or URI."},
 			{Name: "set", Kind: spec.StringList, Help: "<field>=<value> (repeatable)."},
 			{Name: "merge", Kind: spec.String, Help: "YAML mapping of editable fields to merge."},
+			{Name: "tag", Kind: spec.StringList, Help: "Tag to add (repeatable)."},
+			{Name: "untag", Kind: spec.StringList, Help: "Tag to remove (repeatable)."},
 		},
-		Examples: []string{"artefact card 01K9B3T0Z6Q8M2C4R7V1X5N9PA --set title=\"Ordonnance septembre 2026\" --set date=2026-09-18", "artefact card 01K9B3T0Z6Q8M2C4R7V1X5N9PA --set dc.creator=\"Dr X\"", "artefact card 01K9B3T0Z6Q8M2C4R7V1X5N9PA --merge 'x: {mnemo: {note: pour la caisse AVS}}'"},
+		Examples: []string{"artefact card 01K9B3T0Z6Q8M2C4R7V1X5N9PA --set title=\"Ordonnance septembre 2026\" --set date=2026-09-18", "artefact card 01K9B3T0Z6Q8M2C4R7V1X5N9PA --set dc.creator=\"Dr X\"", "artefact card 01K9B3T0Z6Q8M2C4R7V1X5N9PA --merge 'x: {mnemo: {note: pour la caisse AVS}}'", "artefact card 01K9B3T0Z6Q8M2C4R7V1X5N9PA --tag jeannette --tag avs --untag brouillon"},
 		Effects:  []string{"Rewrites the card and appends a card event. Creates no version."},
 		Run: func(ctx *spec.Context) (any, error) {
-			return run(ctx, func(s *store.Store) (any, error) { return s.EditCard(ctx.Str("id"), ctx.List("set"), ctx.Str("merge")) })
+			return run(ctx, func(s *store.Store) (any, error) {
+				if len(ctx.List("set")) == 0 && ctx.Str("merge") == "" {
+					if len(ctx.List("tag")) > 0 || len(ctx.List("untag")) > 0 {
+						return s.Tag(ctx.Str("id"), ctx.List("tag"), ctx.List("untag"))
+					}
+				}
+				c, err := s.EditCard(ctx.Str("id"), ctx.List("set"), ctx.Str("merge"))
+				if err != nil || (len(ctx.List("tag")) == 0 && len(ctx.List("untag")) == 0) {
+					return c, err
+				}
+				return s.Tag(ctx.Str("id"), ctx.List("tag"), ctx.List("untag"))
+			})
 		},
 	})
 	spec.Register(&spec.Action{
@@ -664,6 +678,70 @@ func init() {
 				}
 				return s.Which(r, ctx.Str("sphere"))
 			})
+		},
+	})
+}
+
+func init() {
+	spec.Register(&spec.Action{
+		Category: "artefacts", Name: "revise", Right: "write",
+		Summary:    "Save new content for an artefact as its next version; the earlier versions are kept.",
+		Discussion: "The new content is copied into the store. A sealed artefact stays sealed. The metadata embedded in the new content is read again. Holders keep their hold; a tool that extracted text from the earlier version should do it again.",
+		Params: []spec.Param{
+			{Name: "id", Kind: spec.String, Positional: true, Required: true, Help: "Artefact id or URI."},
+			{Name: "from", Kind: spec.String, Required: true, Help: "The file with the new content."},
+		},
+		Examples: []string{"artefact revise 01K9B3T0Z6Q8M2C4R7V1X5N9PA --from ~/Desktop/facture-annotée.pdf"},
+		Effects:  []string{"Adds a version and appends a revise event."},
+		Run: func(ctx *spec.Context) (any, error) {
+			if !localPaths(ctx) {
+				return nil, spec.UserError("revise reads --from on this machine; this server does not read local paths")
+			}
+			return run(ctx, func(s *store.Store) (any, error) { return s.Revise(ctx.Str("id"), ctx.Str("from")) })
+		},
+	})
+	spec.Register(&spec.Action{
+		Category: "artefacts", Name: "meta", Right: "write",
+		Summary:    "Read the metadata embedded in files into their cards, or write the cards into the files as XMP.",
+		Discussion: "Needs exiftool. read fills the card's embedded block (date taken or created, title, author, subject, keywords, camera, GPS, pages, size, duration, producer) and, when the card's date is still the deposit date, takes the content's own date. write sets XMP Dublin Core title, date, creator, description and the tags into the file, as a new version (images, PDF and videos only).",
+		Params: []spec.Param{
+			{Name: "verb", Kind: spec.String, Positional: true, Required: true, Enum: []string{"read", "write"}, Help: "read or write"},
+			{Name: "id", Kind: spec.StringList, Positional: true, Required: true, Help: "Artefact ids or URIs."},
+		},
+		Examples: []string{"artefact meta read 01K9B3T0Z6Q8M2C4R7V1X5N9PA", "artefact meta write 01K9B3T0Z6Q8M2C4R7V1X5N9PA"},
+		Effects:  []string{"read: rewrites the card. write: adds a version with the metadata written into the file."},
+		Run: func(ctx *spec.Context) (any, error) {
+			return run(ctx, func(s *store.Store) (any, error) {
+				var out []any
+				for _, id := range ctx.List("id") {
+					var r *store.MetaResult
+					var err error
+					if ctx.Str("verb") == "write" {
+						r, err = s.WriteMeta(id)
+					} else {
+						r, err = s.ReadMeta(id)
+					}
+					if err != nil {
+						if len(ctx.List("id")) == 1 {
+							return nil, err
+						}
+						out = append(out, map[string]any{"id": id, "error": err.Error()})
+						continue
+					}
+					out = append(out, r)
+				}
+				return out, nil
+			})
+		},
+	})
+	spec.Register(&spec.Action{
+		Category: "artefacts", Name: "tags", Right: "read",
+		Summary:  "List the tags in use, with how many artefacts carry each.",
+		Params:   []spec.Param{{Name: "sphere", Kind: spec.String, Help: "This sphere only."}},
+		Examples: []string{"artefact tags", "artefact tags --sphere perso"},
+		Effects:  []string{"Reads only."},
+		Run: func(ctx *spec.Context) (any, error) {
+			return run(ctx, func(s *store.Store) (any, error) { return s.TagCounts(ctx.Str("sphere")) })
 		},
 	})
 }

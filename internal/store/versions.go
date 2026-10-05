@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aclemen1/artefact-cli/internal/config"
+	"github.com/aclemen1/artefact-cli/internal/meta"
 	"github.com/aclemen1/artefact-cli/internal/ocfl"
 )
 
@@ -216,8 +217,18 @@ type RedactResult struct {
 // Redact adds a version made from file; with purge, the earlier versions
 // are erased from the store.
 func (s *Store) Redact(ref, file string, purge bool) (*RedactResult, error) {
+	return s.newVersion(ref, file, purge, "redact")
+}
+
+// Revise adds a version made from file and keeps the earlier ones: an
+// edit of the content.
+func (s *Store) Revise(ref, file string) (*RedactResult, error) {
+	return s.newVersion(ref, file, false, "revise")
+}
+
+func (s *Store) newVersion(ref, file string, purge bool, kind string) (*RedactResult, error) {
 	if file == "" {
-		return nil, userErr("--from names the redacted file. Example: artefact redact 01K9B3T0Z6Q8M2C4R7V1X5N9PA --from redacted.pdf --purge")
+		return nil, userErr("--from names the new content. Example: artefact %s 01K9B3T0Z6Q8M2C4R7V1X5N9PA --from new.pdf", kind)
 	}
 	r, err := s.Resolve(ref)
 	if err != nil {
@@ -260,7 +271,7 @@ func (s *Store) Redact(ref, file string, purge bool) (*RedactResult, error) {
 		}
 	}
 	now := s.Now()
-	versions = append(versions, ocfl.NewVersion{Files: []ocfl.SourceFile{{Logical: logical, Path: tmp}}, Created: now, Message: "redact", User: s.user()})
+	versions = append(versions, ocfl.NewVersion{Files: []ocfl.SourceFile{{Logical: logical, Path: tmp}}, Created: now, Message: kind, User: s.user()})
 	newInv, err := ocfl.Rebuild(s.root(r.Sphere), r.Dir, versions)
 	if err != nil {
 		return nil, err
@@ -276,7 +287,12 @@ func (s *Store) Redact(ref, file string, purge bool) (*RedactResult, error) {
 	if c.Sealed {
 		c.Keyed = keyed
 	}
-	if err := appendEvent(r.Dir, Event{At: at, Type: "redact", Agent: s.Agent, Outcome: "ok", Version: c.Version, Detail: map[string]any{"versions_erased": erased}}); err != nil {
+	if !c.Sealed && meta.Available() {
+		if e, err := meta.Read(tmp); err == nil && !e.Empty() {
+			c.Embedded = &e
+		}
+	}
+	if err := appendEvent(r.Dir, Event{At: at, Type: kind, Agent: s.Agent, Outcome: "ok", Version: c.Version, Detail: map[string]any{"versions_erased": erased}}); err != nil {
 		return nil, err
 	}
 	if err := s.saveCard(r, c, at); err != nil {

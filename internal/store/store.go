@@ -22,6 +22,7 @@ import (
 	"github.com/aclemen1/artefact-cli/internal/config"
 	"github.com/aclemen1/artefact-cli/internal/index"
 	"github.com/aclemen1/artefact-cli/internal/keys"
+	"github.com/aclemen1/artefact-cli/internal/meta"
 	"github.com/aclemen1/artefact-cli/internal/ocfl"
 )
 
@@ -361,14 +362,23 @@ func (s *Store) Put(r io.Reader, o PutOptions) (*PutResult, error) {
 	if title == "" || title == "." {
 		title = id
 	}
+	var emb *meta.Embedded
+	if sl == nil && meta.Available() {
+		if e, err := meta.Read(filepath.Join(staged.Dir, "v1", "content", logical)); err == nil && !e.Empty() {
+			emb = &e
+		}
+	}
 	date := o.Date
+	if date == "" && emb != nil && emb.Date != "" {
+		date = emb.Date // the content's own date: taken, created
+	}
 	if date == "" {
 		date = now.Format("2006-01-02")
 	}
 	at := now.Format(time.RFC3339)
 	c := &Card{
 		ID: id, Sphere: sphere, Title: title, Date: date, Mime: mt, Size: size,
-		Filename: filepath.Base(o.Filename), Ext: ext, Version: 1, Digest: digest, Sealed: sl != nil, Keyed: keyed,
+		Filename: filepath.Base(o.Filename), Ext: ext, Version: 1, Digest: digest, Sealed: sl != nil, Keyed: keyed, Embedded: emb,
 		Deposited: at, Updated: at, Holders: []index.Holder{},
 	}
 	if c.Filename == "." {

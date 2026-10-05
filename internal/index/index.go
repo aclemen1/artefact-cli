@@ -65,6 +65,11 @@ CREATE TABLE IF NOT EXISTS classes (
   pending    INTEGER NOT NULL,
   PRIMARY KEY (id, plan)
 );
+CREATE TABLE IF NOT EXISTS tags (
+  id  TEXT NOT NULL,
+  tag TEXT NOT NULL,
+  PRIMARY KEY (id, tag)
+);
 CREATE TABLE IF NOT EXISTS keys (
   key    TEXT PRIMARY KEY,
   id     TEXT NOT NULL,
@@ -135,7 +140,7 @@ func (x *Index) Close() error { return x.db.Close() }
 
 // Reset empties every table, before a rebuild.
 func (x *Index) Reset() error {
-	_, err := x.db.Exec(`DELETE FROM artefacts; DELETE FROM holders; DELETE FROM keys; DELETE FROM classes; DELETE FROM search;`)
+	_, err := x.db.Exec(`DELETE FROM artefacts; DELETE FROM holders; DELETE FROM keys; DELETE FROM classes; DELETE FROM search; DELETE FROM tags;`)
 	return err
 }
 
@@ -173,7 +178,7 @@ func (x *Index) Delete(id string) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, q := range []string{`DELETE FROM artefacts WHERE id = ?`, `DELETE FROM holders WHERE id = ?`, `DELETE FROM keys WHERE id = ?`, `DELETE FROM classes WHERE id = ?`, `DELETE FROM search WHERE id = ?`} {
+	for _, q := range []string{`DELETE FROM artefacts WHERE id = ?`, `DELETE FROM holders WHERE id = ?`, `DELETE FROM keys WHERE id = ?`, `DELETE FROM classes WHERE id = ?`, `DELETE FROM search WHERE id = ?`, `DELETE FROM tags WHERE id = ?`} {
 		if _, err := tx.Exec(q, id); err != nil {
 			return err
 		}
@@ -247,13 +252,15 @@ func (x *Index) Holders(id string) ([]Holder, error) {
 }
 
 type Filter struct {
-	HeldBy   string // tool, or tool:ref
-	Class    string // plan, or plan:notation (descendants included)
-	Pending  bool   // classified but waiting for a human (in Class's plan when given)
-	State    string // "" every artefact, "active" not archived, "archived" archived only
-	Orphaned bool
-	Since    string // deposited on or after this date
-	Limit    int
+	HeldBy       string // tool, or tool:ref
+	Class        string // plan, or plan:notation (descendants included)
+	Pending      bool   // classified but waiting for a human (in Class's plan when given)
+	State        string // "" every artefact, "active" not archived, "archived" archived only
+	Tag          string // keep the artefacts with this tag
+	Unclassified string // keep the artefacts without a node in this plan
+	Orphaned     bool
+	Since        string // deposited on or after this date
+	Limit        int
 }
 
 func (x *Index) List(f Filter) ([]Row, error) {
@@ -288,6 +295,14 @@ func (x *Index) List(f Filter) ([]Row, error) {
 		} else {
 			where = append(where, `id IN (SELECT id FROM classes WHERE pending = 1)`)
 		}
+	}
+	if f.Unclassified != "" {
+		where = append(where, `id NOT IN (SELECT id FROM classes WHERE plan = ? AND node != '')`)
+		args = append(args, f.Unclassified)
+	}
+	if f.Tag != "" {
+		where = append(where, `id IN (SELECT id FROM tags WHERE tag = ?)`)
+		args = append(args, f.Tag)
 	}
 	switch f.State {
 	case "active":
@@ -529,4 +544,41 @@ func ftsQuery(q string) string {
 		parts = append(parts, `"`+strings.ReplaceAll(w, `"`, `""`)+`"*`)
 	}
 	return strings.Join(parts, " AND ")
+}
+
+// PutTags replaces the tags of an artefact.
+func (x *Index) PutTags(id string, tags []string) error {
+	tx, err := x.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM tags WHERE id = ?`, id); err != nil {
+		return err
+	}
+	for _, t := range tags {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO tags (id, tag) VALUES (?, ?)`, id, t); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// Tags counts the tags in use.
+func (x *Index) Tags() (map[string]int, error) {
+	rows, err := x.db.Query(`SELECT tag, COUNT(*) FROM tags GROUP BY tag`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var t string
+		var n int
+		if err := rows.Scan(&t, &n); err != nil {
+			return nil, err
+		}
+		out[t] = n
+	}
+	return out, rows.Err()
 }

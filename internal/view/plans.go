@@ -143,14 +143,16 @@ func (t *Tree) statPlans(name string, parts []string) (*Info, error) {
 		return nil, err
 	}
 	if n.dir {
-		return t.dir(name), nil
+		d := t.dir(name)
+		d.ident = "d:plans/" + strings.Join(parts, "/")
+		return d, nil
 	}
 	r := rows[n.id]
 	vs, err := t.st.VersionFiles(t.sphere, n.id)
 	if err != nil || len(vs) == 0 {
 		return nil, fs.ErrNotExist
 	}
-	return &Info{name: name, size: r.Size, mod: parseTime(r.Updated, t.started), real: vs[len(vs)-1].Path}, nil
+	return &Info{name: name, size: r.Size, mod: parseTime(r.Updated, t.started), real: vs[len(vs)-1].Path, ident: "a:" + n.id}, nil
 }
 
 func (t *Tree) readPlans(parts []string) ([]*Info, error) {
@@ -170,11 +172,13 @@ func (t *Tree) readPlans(parts []string) ([]*Info, error) {
 	for _, k := range names {
 		c := n.children[k]
 		if c.dir {
-			out = append(out, t.dir(k))
+			d := t.dir(k)
+			d.ident = "d:plans/" + strings.Join(append(append([]string{}, parts...), k), "/")
+			out = append(out, d)
 			continue
 		}
 		r := rows[c.id]
-		out = append(out, &Info{name: k, size: r.Size, mod: parseTime(r.Updated, t.started)})
+		out = append(out, &Info{name: k, size: r.Size, mod: parseTime(r.Updated, t.started), ident: "a:" + c.id})
 	}
 	return out, nil
 }

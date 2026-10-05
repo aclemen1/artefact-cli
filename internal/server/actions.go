@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -211,7 +212,7 @@ func init() {
 func init() {
 	spec.Register(&spec.Action{
 		Category: "ops", Name: "locate",
-		Summary:    "Give a local file path for an artefact: its place in a mounted view, or else a copy in the user's cache.",
+		Summary:    "Give a local file path to open an artefact with an application: a copy in the user's cache, reused while current.",
 		Discussion: "Used by Artefact.app to open artefact:// links. A sealed artefact gets no path: it is read only with `artefact get --reveal`.",
 		Params:     []spec.Param{{Name: "id", Kind: spec.String, Positional: true, Required: true, Help: "Artefact id or URI."}},
 		Examples:   []string{"artefact locate artefact://perso/01K9B3T0Z6Q8M2C4R7V1X5N9PA"},
@@ -235,8 +236,8 @@ func init() {
 	})
 }
 
-// Locate gives a local path for an artefact: its place in a mounted view,
-// or a copy (mode 0600) in ~/Library/Caches/artefact/open/<id>/.
+// Locate gives a local path to open an artefact with an application: a
+// copy (mode 0600) in ~/Library/Caches/artefact/open/<id>/, reused while current.
 func Locate(cfg *config.Config, st *store.Store, id string) (path, from string, err error) {
 	ref, err := st.Resolve(id)
 	if err != nil {
@@ -249,15 +250,8 @@ func Locate(cfg *config.Config, st *store.Store, id string) (path, from string, 
 	if ref.Row.Sealed {
 		return "", "", spec.UserError("artefact %s is sealed; read it with `artefact get %s --reveal --out <file>`", ref.ID, ref.ID)
 	}
-	for _, dir := range cfg.Views.Mounts[ref.Sphere] {
-		if !mounted(config.Expand(dir)) {
-			continue
-		}
-		p := filepath.Join(config.Expand(dir), "a", ref.ID+ref.Row.Ext)
-		if _, err := os.Stat(p); err == nil {
-			return p, "view", nil
-		}
-	}
+	// Sandboxed applications (Preview, Pages…) cannot open files on the NFS
+	// view: hand them a local copy, reused while it is current.
 	name := ref.Row.Filename
 	if name == "" {
 		name = ref.ID + ref.Row.Ext
@@ -268,6 +262,9 @@ func Locate(cfg *config.Config, st *store.Store, id string) (path, from string, 
 		return "", "", err
 	}
 	p := filepath.Join(dir, filepath.Base(name))
+	if fi, err := os.Stat(p); err == nil && fi.Size() == ref.Row.Size && !fi.ModTime().Before(parseRFC3339(ref.Row.Updated)) {
+		return p, "cache", nil
+	}
 	rc, _, err := st.OpenPayload(ref.ID, "", false)
 	if err != nil {
 		return "", "", err
@@ -310,4 +307,9 @@ func init() {
 			return spec.Streamed{}, tui.Run(cfg, st, Locate)
 		},
 	})
+}
+
+func parseRFC3339(s string) time.Time {
+	t, _ := time.Parse(time.RFC3339, s)
+	return t
 }

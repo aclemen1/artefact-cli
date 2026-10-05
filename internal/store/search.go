@@ -35,6 +35,11 @@ func searchDoc(objDir string, c *Card) (meta, body string) {
 	for plan, k := range c.Classes {
 		m = append(m, plan, k.Node)
 	}
+	m = append(m, c.Tags...)
+	if e := c.Embedded; e != nil {
+		m = append(m, e.Title, e.Author, e.Subject, e.Camera, e.Producer)
+		m = append(m, e.Keywords...)
+	}
 	if c.Sealed {
 		return strings.Join(m, " "), ""
 	}
@@ -69,6 +74,9 @@ func sortedKeys(m map[string]any) []string {
 }
 
 func (s *Store) indexSearch(x *index.Index, objDir string, c *Card) error {
+	if err := x.PutTags(c.ID, c.Tags); err != nil {
+		return err
+	}
 	meta, body := searchDoc(objDir, c)
 	return x.PutSearch(c.ID, c.Title, c.Filename, meta, body)
 }

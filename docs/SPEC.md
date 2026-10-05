@@ -228,6 +228,9 @@ backend (local disk by default).
 | `stat <id>...` | card, versions, holders, renditions, locations and their last fixity check; one or many ids |
 | `which <file\|->  [--sphere]` | without writing anything, the artefact that holds exactly this content: by SHA-256 among clear artefacts, by the sphere's keyed digest among sealed ones; `found: false` otherwise |
 | `search <words> [--sphere] [--state]` | full-text search of titles, file names, cards and text contents (FTS5, accents ignored); a sealed artefact by its card only |
+| `revise <id> --from <file>` | saves new content as the next version; earlier versions are kept; a sealed artefact stays sealed |
+| `meta read\|write <id>...` | read: the file's own metadata (EXIF, XMP, PDF, Office, through exiftool) into the card's `embedded` block, and the content's date when the card still has the deposit date; write: the card's title, date, creator, description and tags into the file as XMP, as a new version. A sealed artefact's own metadata never enters its card |
+| `card <id> --tag <t> --untag <t>`, `tags`, `ls --tag <t>` | keywords: in the card, searchable and filterable |
 | `archive <id>...`, `unarchive <id>...` | the archived state: kept, replicated, reachable by id and view path, hidden from lists |
 | `ls [--sphere] [--class <plan>:<node>] [--held-by <tool>[:<ref>]] [--orphaned] [--sealed] [--since]` | lists artefacts |
 | `render <id> [--wait]` | asks `lector` for the text rendition again |

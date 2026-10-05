@@ -4,12 +4,14 @@
 package view
 
 import (
+	"hash/fnv"
 	"io/fs"
 	"os"
 	"path"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/aclemen1/artefact-cli/internal/index"
@@ -63,11 +65,12 @@ func (t *Tree) snapshot() (map[string]index.Row, []string, error) {
 
 // Info describes one node of the tree.
 type Info struct {
-	name string
-	size int64
-	mod  time.Time
-	dir  bool
-	real string // content file, for a file
+	name  string
+	size  int64
+	mod   time.Time
+	dir   bool
+	real  string // content file, for a file
+	ident string // stable identity, for the file number
 }
 
 func (i *Info) Name() string { return i.name }
@@ -80,7 +83,26 @@ func (i *Info) Mode() fs.FileMode {
 }
 func (i *Info) ModTime() time.Time { return i.mod }
 func (i *Info) IsDir() bool        { return i.dir }
-func (i *Info) Sys() any           { return nil }
+
+// Sys gives the NFS server a small, stable file number and the user as
+// owner: macOS applications resolve files by number, and some reject
+// 64-bit numbers or files owned by root on a network volume.
+func (i *Info) Sys() any {
+	h := fnv.New32a()
+	switch {
+	case i.ident != "":
+		h.Write([]byte(i.ident))
+	case i.real != "":
+		h.Write([]byte(i.real))
+	default:
+		h.Write([]byte("dir:" + i.name))
+	}
+	mode := uint16(0o444 | syscall.S_IFREG)
+	if i.dir {
+		mode = uint16(0o555 | syscall.S_IFDIR)
+	}
+	return &syscall.Stat_t{Ino: uint64(h.Sum32()) | 1<<20, Nlink: 1, Uid: uint32(os.Getuid()), Gid: uint32(os.Getgid()), Mode: mode, Size: i.size}
+}
 
 // Real is the content file behind a file node.
 func (i *Info) Real() string { return i.real }
@@ -125,7 +147,9 @@ func (t *Tree) Stat(p string) (*Info, error) {
 	name := parts[1]
 	if len(parts) == 2 {
 		if r, ok := rows[name]; ok {
-			return t.dir(r.ID), nil
+			d := t.dir(r.ID)
+			d.ident = "d:a/" + r.ID
+			return d, nil
 		}
 		id := strings.TrimSuffix(name, path.Ext(name))
 		r, ok := rows[id]
@@ -137,7 +161,7 @@ func (t *Tree) Stat(p string) (*Info, error) {
 			return nil, fs.ErrNotExist
 		}
 		// Same size and time as the listing of a/, so clients see one file.
-		return &Info{name: name, size: r.Size, mod: parseTime(r.Updated, t.started), real: vs[len(vs)-1].Path}, nil
+		return &Info{name: name, size: r.Size, mod: parseTime(r.Updated, t.started), real: vs[len(vs)-1].Path, ident: "a:" + r.ID}, nil
 	}
 	if len(parts) == 3 {
 		r, ok := rows[name]
@@ -179,7 +203,9 @@ func (t *Tree) ReadDir(p string) ([]*Info, error) {
 			if r.Archived != "" {
 				continue // reachable by its path, not listed
 			}
-			out = append(out, &Info{name: id + r.Ext, size: r.Size, mod: parseTime(r.Updated, t.started)}, t.dir(id))
+			d := t.dir(id)
+			d.ident = "d:a/" + id
+			out = append(out, &Info{name: id + r.Ext, size: r.Size, mod: parseTime(r.Updated, t.started), ident: "a:" + id}, d)
 		}
 		return out, nil
 	}

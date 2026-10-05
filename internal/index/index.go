@@ -101,7 +101,7 @@ type Index struct{ db *sql.DB }
 var ErrNotFound = errors.New("index: not found")
 
 func Open(path string) (*Index, error) {
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)")
 	if err != nil {
 		return nil, err
 	}

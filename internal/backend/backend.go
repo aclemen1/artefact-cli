@@ -143,10 +143,17 @@ func Join(parts ...string) string { return strings.TrimPrefix(path.Join(parts...
 // browser for the user's consent. The scope drive.file limits the remote to
 // the files it creates; deletions skip the Drive trash.
 func CreateDrive(ctx context.Context, name string) error {
-	_, err := config.CreateRemote(ctx, name, "drive", map[string]any{
-		"scope":     "drive.file",
-		"use_trash": "false",
-	}, config.UpdateRemoteOpt{})
+	return CreateDriveWith(ctx, name, "", "")
+}
+
+// CreateDriveWith sets up (or sets up again) a Drive remote with the given
+// OAuth client; empty values use rclone's shared client.
+func CreateDriveWith(ctx context.Context, name, clientID, clientSecret string) error {
+	params := map[string]any{"scope": "drive.file", "use_trash": "false"}
+	if clientID != "" {
+		params["client_id"], params["client_secret"] = clientID, clientSecret
+	}
+	_, err := config.CreateRemote(ctx, name, "drive", params, config.UpdateRemoteOpt{})
 	return err
 }
 

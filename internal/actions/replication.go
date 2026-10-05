@@ -57,14 +57,16 @@ func init() {
 		Summary:    "Add a backend to a sphere's replication, or list the backends.",
 		Discussion: "add --type drive runs Google Drive's consent in the browser (scope drive.file: the remote sees only the files artefact creates; deletions skip the Drive trash), keeps the token in ~/.config/artefact/rclone.conf, then adds the backend to replication.<sphere>. add --remote uses an rclone remote path as it is. A backend belongs to one sphere.",
 		Params: []spec.Param{
-			{Name: "verb", Kind: spec.String, Positional: true, Required: true, Enum: []string{"add", "ls"}, Help: "add or ls"},
+			{Name: "verb", Kind: spec.String, Positional: true, Required: true, Enum: []string{"add", "ls", "reconnect"}, Help: "add, ls, or reconnect (consent again, with your own OAuth client)"},
 			{Name: "name", Kind: spec.String, Positional: true, Help: "Backend name, for add, e.g. gdrive-perso."},
 			{Name: "sphere", Kind: spec.String, Help: "Sphere of the backend, for add."},
 			{Name: "type", Kind: spec.String, Enum: []string{"drive", "remote"}, Default: "remote", Help: "drive: create a Google Drive remote; remote: use --remote as given."},
 			{Name: "remote", Kind: spec.String, Help: "rclone remote path. Defaults to <name>:artefact for --type drive."},
 			{Name: "untrusted", Kind: spec.Bool, Help: "Its copies do not count towards numcopies and mincopies."},
+			{Name: "client-id", Kind: spec.String, Help: "Your Google OAuth client id, for add --type drive or reconnect."},
+			{Name: "client-secret", Kind: spec.String, Help: "Its secret, for add --type drive or reconnect."},
 		},
-		Examples: []string{"artefact backend add gdrive-perso --sphere perso --type drive", "artefact backend add disk --sphere perso --remote :local:/Volumes/Backup/artefact", "artefact backend ls"},
+		Examples: []string{"artefact backend add gdrive-perso --sphere perso --type drive", "artefact backend add disk --sphere perso --remote :local:/Volumes/Backup/artefact", "artefact backend ls", "artefact backend reconnect gdrive-perso --client-id 123.apps.googleusercontent.com --client-secret GOCSPX-…"},
 		Effects:  []string{"add: may open the browser for consent; writes rclone.conf and the artefact configuration."},
 		Run: func(ctx *spec.Context) (any, error) {
 			path := ctx.Config
@@ -87,6 +89,28 @@ func init() {
 				}
 				return map[string]any{"backends": cfg.Backends, "replication": cfg.Replication, "coverage": cov}, nil
 			}
+			if ctx.Str("verb") == "reconnect" {
+				name := ctx.Str("name")
+				b, ok := cfg.Backends[name]
+				if !ok {
+					return nil, spec.UserError("no backend %q; see `artefact backend ls`", name)
+				}
+				if (ctx.Str("client-id") == "") != (ctx.Str("client-secret") == "") {
+					return nil, spec.UserError("give --client-id and --client-secret together")
+				}
+				rc := cfg.RcloneConfig
+				if rc == "" {
+					rc = backend.ConfigPath()
+				}
+				backend.Init(rc)
+				fmt.Fprintf(os.Stderr, "Google Drive consent for %q: your browser opens; sign in with the account of sphere %q.\n", name, b.Sphere)
+				if err := backend.CreateDriveWith(context.Background(), name, ctx.Str("client-id"), ctx.Str("client-secret")); err != nil {
+					return nil, fmt.Errorf("drive set-up: %w", err)
+				}
+				_ = os.Chmod(rc, 0o600)
+				return map[string]any{"backend": name, "own_client": ctx.Str("client-id") != "",
+					"next": "restart serve: launchctl kickstart -k gui/$(id -u)/aero.clement.artefact"}, nil
+			}
 			name, sp := ctx.Str("name"), ctx.Str("sphere")
 			if name == "" || !slices.Contains(cfg.Spheres, sp) {
 				return nil, spec.UserError("backend add takes a name and a configured sphere. Example: artefact backend add gdrive-perso --sphere perso --type drive")
@@ -105,7 +129,7 @@ func init() {
 				}
 				backend.Init(rc)
 				fmt.Fprintf(os.Stderr, "Google Drive consent for %q: your browser opens; sign in with the account of sphere %q.\n", name, sp)
-				if err := backend.CreateDrive(context.Background(), name); err != nil {
+				if err := backend.CreateDriveWith(context.Background(), name, ctx.Str("client-id"), ctx.Str("client-secret")); err != nil {
 					return nil, fmt.Errorf("drive set-up: %w", err)
 				}
 				_ = os.Chmod(rc, 0o600)

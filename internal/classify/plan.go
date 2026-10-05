@@ -43,6 +43,7 @@ type Retention struct {
 
 // Rule places an artefact without a decider when every field it sets matches.
 type Rule struct {
+	Priority int    `yaml:"priority,omitempty" json:"priority,omitempty"` // a higher priority wins; then the deeper node
 	Mime     string `yaml:"mime,omitempty" json:"mime,omitempty"`         // glob, e.g. image/*
 	Filename string `yaml:"filename,omitempty" json:"filename,omitempty"` // regular expression, case-insensitive
 	Title    string `yaml:"title,omitempty" json:"title,omitempty"`       // regular expression, case-insensitive
@@ -157,16 +158,20 @@ type Facts struct {
 	File                        string // a local path to the payload, for deciders that open files
 }
 
-// MatchRules returns the deepest node whose rule matches, if any.
+// MatchRules returns the node of the matching rule of highest priority,
+// the deeper node first at equal priority.
 func (p *Plan) MatchRules(f Facts) *Node {
 	var best *Node
-	depth := -1
+	prio, depth := 0, -1
 	var walk func(ns []*Node, d int)
 	walk = func(ns []*Node, d int) {
 		for _, n := range ns {
 			for _, r := range n.Rules {
-				if r.matches(f) && d > depth {
-					best, depth = n, d
+				if !r.matches(f) {
+					continue
+				}
+				if best == nil || r.Priority > prio || (r.Priority == prio && d > depth) {
+					best, prio, depth = n, r.Priority, d
 				}
 			}
 			walk(n.Children, d+1)

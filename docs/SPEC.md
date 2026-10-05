@@ -287,58 +287,70 @@ The actions are defined once (action specs) and served on four surfaces:
 
 ## 6. Backends
 
-### 6.1 Connector interface
+### 6.1 Connector
 
-```go
-type Backend interface {
-    Put(ctx, key string, r io.Reader, size int64) (Location, error)
-    Get(ctx, loc Location) (io.ReadCloser, error)
-    Stat(ctx, loc Location) (Info, error)   // size, provider digest if any
-    Delete(ctx, loc Location) error
-    List(ctx, prefix string) iter.Seq2[Location, error]
-}
+A backend is an rclone remote path, owned by one sphere:
+
+```yaml
+backends:
+  gdrive-perso: { remote: "gdrive-perso:artefact", sphere: perso }
+  disk:         { remote: ":local:/Volumes/Backup/artefact", sphere: perso, trusted: false }
 ```
 
-- A **location** is what the backend needs to find the copy again: a path
-  for disk and Dropbox, a `fileId` for Google Drive. It is recorded in the
-  index and in a `replicate` event.
-- Objects are copied whole: an OCFL object directory, inventory included.
-- `Stat` returns the provider's digest when it has one (Drive
-  `sha256Checksum`, Dropbox `content_hash`); otherwise `fsck` downloads.
-
-### 6.2 Connectors
-
-| Connector | Through | Notes |
-|---|---|---|
-| `local` | native Go | primary store by default |
-| `rclone` | `github.com/rclone/rclone/fs`, pinned version | any rclone remote: Drive, Dropbox, iCloud Drive, S3, SFTP, WebDAV… |
-
-- A backend belongs to one sphere. Its configuration names the sphere, and
-  `artefact` refuses to write another sphere's object there.
+- artefact embeds rclone as a library (`fs`, `operations`, `walk`), with the
+  `drive` and `local` backends; more are one import away. Its rclone
+  configuration lives apart, in `~/.config/artefact/rclone.conf` (mode 0600),
+  or `rclone_config`.
+- The operations used are put (`operations.Rcat`), stat with the provider's
+  SHA-256 when it gives one (Drive does), open, delete, purge and recursive
+  list.
+- A sphere's files go under `<remote>/<sphere>/`, mirroring its storage root
+  file for file: each backend holds a valid OCFL storage root, which can be
+  copied back as it is.
 - `trusted: false` marks a backend whose copies do not count towards
-  `mincopies`. iCloud Drive is untrusted by default: macOS may evict a file
-  from the disk at any time, and the rclone connector is experimental.
-- Sealed objects are stored encrypted on every backend, whatever its own
-  encryption.
+  `numcopies` and `mincopies`. iCloud Drive belongs there: macOS may evict a
+  file from the disk at any time, and the rclone connector is experimental.
+- `artefact backend add <name> --sphere <s> --type drive` runs Google
+  Drive's consent in the browser, with the scope `drive.file` (the remote
+  sees only the files artefact creates) and `use_trash: false` (deletions
+  are final). `--remote <path>` takes any rclone remote path as it is.
+
+### 6.2 What travels
+
+- Every file of the storage root except the staging area: namaste, layout,
+  inventories, content, card and event log.
+- A sealed artefact's payload is already ciphertext. Its card and event log
+  are encrypted with the sphere's key on the way and stored as `.age`, so a
+  backend never sees the title or file name of a sealed artefact.
+- A clear artefact travels in clear: a backend can read it. Sealing is the
+  way to keep a file from a backend.
 
 ## 7. Replication
 
 ```yaml
 replication:
-  perso: { numcopies: 2, mincopies: 1, backends: [local, gdrive-perso] }
-  pro:   { numcopies: 2, mincopies: 1, backends: [local, gdrive-pro] }
-  classes:
-    "household:3": { numcopies: 3 }       # override for a plan node
+  perso: { numcopies: 2, mincopies: 1, backends: [gdrive-perso], every: 15m }
 ```
 
-- `numcopies`: copies wanted. `mincopies`: copies that must exist, verified,
-  before any copy is dropped.
-- `sync` copies what is missing, records each location, and drops copies on
-  backends no longer listed, after verifying `mincopies` elsewhere.
-- `fsck` verifies digests; a mismatch marks the location bad and `sync`
-  replaces it from a good copy.
-- `serve` runs `sync` after each deposit and `fsck` on a sample every night.
-- `stats` reports artefacts below `numcopies` and below `mincopies`.
+- The local store is one copy. `numcopies` is the number of copies wanted;
+  `mincopies` the number that must exist before a copy is dropped.
+- The index records every file sent: backend, local path, remote path, the
+  SHA-256 of the local file and of what was sent, its size, when it was sent
+  and last verified. Local SHA-256 are cached by size and modification time.
+- `artefact sync [--sphere] [--dry-run]` sends what a backend lacks or holds
+  in an older state, and removes from it what the store no longer holds.
+  `serve` runs it at start and then every `every` (15m by default).
+- `seal`, `redact --purge` and `erase` sync their object at once: no erased
+  version outlives the operation on a backend that answers. A backend that
+  fails is listed in the result and caught up by the next sync.
+- `artefact fsck [--sphere] [--sample N] [--deep]` verifies local objects
+  against their inventories, and copies against their recorded size and
+  SHA-256 (downloaded with `--deep` when the backend gives none). A bad copy
+  is dropped from the record; the next sync sends it again.
+- `stat` shows each artefact's copies (complete, missing files, last
+  verification); `backend ls` shows, per sphere, the artefacts below
+  `numcopies` and `mincopies`.
+- Removing a backend from `replication` leaves its copies in place.
 
 ## 8. Erasure
 
@@ -382,9 +394,12 @@ reference and leaves the artefact. `--force` is reserved to a human at the
 CLI or the TUI.
 
 Not covered, and listed in the result: backups made outside `artefact`
-(Time Machine), provider trash and version history (Drive, Dropbox keep
-deleted files for a while; `artefact` empties them when the API allows),
-copies made by holders.
+(Time Machine), version history kept by a provider, copies made by
+holders. Drive remotes made by `backend add` delete without the trash.
+
+The plan lists one location per backend that holds files of the artefact;
+confirmation purges each one, checks that nothing of the object is left
+there, and reports each backend in the proof.
 
 - The code has the form `XXXX-XXXX`. The pending plan is kept in
   `.artefact/erase/`, under the SHA-256 of its code: the code itself is

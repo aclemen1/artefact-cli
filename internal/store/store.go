@@ -18,6 +18,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/aclemen1/artefact-cli/internal/backend"
 	"github.com/aclemen1/artefact-cli/internal/config"
 	"github.com/aclemen1/artefact-cli/internal/index"
 	"github.com/aclemen1/artefact-cli/internal/keys"
@@ -43,7 +44,8 @@ type Store struct {
 	Now     func() time.Time
 	Keys    keys.Source
 
-	indexes map[string]*index.Index
+	indexes  map[string]*index.Index
+	backends map[string]*backend.Backend
 }
 
 // Open opens the store for the granted spheres (all configured ones when empty).
@@ -678,6 +680,7 @@ type Stat struct {
 	Card      *Card         `json:"card"`
 	Versions  []VersionInfo `json:"versions"`
 	Locations []Location    `json:"locations"`
+	Copies    []Copy        `json:"copies,omitempty"`
 	Events    []Event       `json:"events,omitempty"`
 }
 
@@ -704,6 +707,9 @@ func (s *Store) Stat(refs []string, withEvents bool) ([]Stat, []string, error) {
 			return nil, nil, err
 		}
 		st := Stat{URI: URI(r.Sphere, r.ID), Card: c, Locations: []Location{{Backend: "local", Path: r.Dir}}}
+		if st.Copies, err = s.copiesOf(r.Sphere, r.Row.Path); err != nil {
+			return nil, nil, err
+		}
 		for _, vn := range inv.VersionNames() {
 			vi := VersionInfo{Version: vn, Created: inv.Versions[vn].Created, Message: inv.Versions[vn].Message}
 			if files, err := inv.Files(vn); err == nil {

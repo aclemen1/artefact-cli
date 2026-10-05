@@ -347,6 +347,7 @@ func (h *Server) Serve(ctx context.Context, socketPath, httpAddr string) error {
 	}
 	h.views = views
 	defer views.Close()
+	go h.syncLoop(ctx)
 	nfsListeners, err := h.startNFS(errc)
 	if err != nil {
 		return err
@@ -407,4 +408,50 @@ func (h *Server) Serve(ctx context.Context, socketPath, httpAddr string) error {
 		_ = s.Shutdown(sctx)
 	}
 	return nil
+}
+
+// syncLoop keeps every sphere's backends up to date, at start and then every
+// replication.<sphere>.every.
+func (h *Server) syncLoop(ctx context.Context) {
+	for _, sp := range h.Cfg.Spheres {
+		pol := h.Cfg.ReplicationOf(sp)
+		if len(pol.Backends) == 0 {
+			continue
+		}
+		every, err := time.ParseDuration(pol.Every)
+		if err != nil || every <= 0 {
+			every = 15 * time.Minute
+		}
+		go func(sp string, every time.Duration) {
+			st, err := store.Open(h.Cfg, []string{sp}, "artefact-sync")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "artefact serve: sync %s: %v\n", sp, err)
+				return
+			}
+			defer st.Close()
+			t := time.NewTicker(every)
+			defer t.Stop()
+			for {
+				res, err := st.Sync(ctx, sp, false)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "artefact serve: sync %s: %v\n", sp, err)
+				}
+				for _, r := range res {
+					for _, b := range r.Backends {
+						if b.Uploaded > 0 || b.Deleted > 0 || len(b.Errors) > 0 {
+							fmt.Fprintf(os.Stderr, "artefact serve: sync %s → %s: %d sent (%d bytes), %d removed, %d error(s)\n", sp, b.Backend, b.Uploaded, b.Bytes, b.Deleted, len(b.Errors))
+						}
+						for _, e := range b.Errors {
+							fmt.Fprintf(os.Stderr, "artefact serve:   %s\n", e)
+						}
+					}
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+				}
+			}
+		}(sp, every)
+	}
 }

@@ -21,6 +21,12 @@ type Config struct {
 	Erase Erase             `yaml:"erase,omitempty"`
 	Serve Serve             `yaml:"serve,omitempty"`
 	Views Views             `yaml:"views,omitempty"`
+	// Backends are the rclone remotes artefact copies objects to.
+	Backends map[string]Backend `yaml:"backends,omitempty"`
+	// Replication sets, per sphere, how many copies an artefact needs.
+	Replication map[string]Replication `yaml:"replication,omitempty"`
+	// RcloneConfig is rclone's configuration file; default ~/.config/artefact/rclone.conf.
+	RcloneConfig string `yaml:"rclone_config,omitempty"`
 
 	path string `yaml:"-"`
 }
@@ -32,6 +38,35 @@ type Erase struct {
 type Serve struct {
 	Socket string `yaml:"socket,omitempty"` // default ~/.local/state/artefact/sock
 	HTTP   string `yaml:"http,omitempty"`   // loopback address, e.g. 127.0.0.1:7780
+}
+
+// Backend is one storage backend: an rclone remote path, owned by one sphere.
+type Backend struct {
+	Remote  string `yaml:"remote" json:"remote"`                       // e.g. gdrive-perso:artefact
+	Sphere  string `yaml:"sphere" json:"sphere"`                       // the only sphere it may hold
+	Trusted *bool  `yaml:"trusted,omitempty" json:"trusted,omitempty"` // default true; false: its copies do not count
+}
+
+func (b Backend) IsTrusted() bool { return b.Trusted == nil || *b.Trusted }
+
+// Replication is the copy policy of a sphere. The local store is one copy.
+type Replication struct {
+	NumCopies int      `yaml:"numcopies" json:"numcopies"`
+	MinCopies int      `yaml:"mincopies" json:"mincopies"`
+	Backends  []string `yaml:"backends" json:"backends"`
+	Every     string   `yaml:"every,omitempty" json:"every,omitempty"` // how often serve syncs, default 15m
+}
+
+// ReplicationOf returns the policy of sphere, with defaults.
+func (c *Config) ReplicationOf(sphere string) Replication {
+	r := c.Replication[sphere]
+	if r.NumCopies == 0 {
+		r.NumCopies = 1 + len(r.Backends)
+	}
+	if r.MinCopies == 0 {
+		r.MinCopies = 1
+	}
+	return r
 }
 
 // Views configures the read-only file views of `artefact serve`.
@@ -124,6 +159,22 @@ func (c *Config) Validate() error {
 	}
 	if !slices.Contains(c.Spheres, c.DefaultSphere) {
 		return fmt.Errorf("configuration: default_sphere %q is not in spheres %v", c.DefaultSphere, c.Spheres)
+	}
+	for name, b := range c.Backends {
+		if b.Remote == "" || !slices.Contains(c.Spheres, b.Sphere) {
+			return fmt.Errorf("configuration: backend %q needs a remote and one configured sphere, got remote %q sphere %q", name, b.Remote, b.Sphere)
+		}
+	}
+	for sp, r := range c.Replication {
+		for _, name := range r.Backends {
+			b, ok := c.Backends[name]
+			if !ok {
+				return fmt.Errorf("configuration: replication of %q names an unknown backend %q", sp, name)
+			}
+			if b.Sphere != sp {
+				return fmt.Errorf("configuration: backend %q belongs to sphere %q, not %q", name, b.Sphere, sp)
+			}
+		}
 	}
 	return nil
 }

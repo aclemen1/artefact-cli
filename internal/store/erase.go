@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -32,6 +33,7 @@ type PlanItem struct {
 	Holders   []index.Holder `json:"holders"`
 	Locations []Location     `json:"locations"`
 	digests   []string
+	rel       string // object root, relative to the sphere's storage root
 }
 
 type Plan struct {
@@ -75,8 +77,13 @@ func (s *Store) plan(req EraseRequest) (*Plan, error) {
 			return nil, err
 		}
 		names := inv.VersionNames()
-		it := PlanItem{URI: URI(r.Sphere, r.ID), Title: c.Title, Whole: true, Versions: names, Holders: c.Holders,
+		it := PlanItem{URI: URI(r.Sphere, r.ID), Title: c.Title, Whole: true, Versions: names, Holders: c.Holders, rel: filepath.ToSlash(r.Row.Path),
 			Locations: []Location{{Backend: "local", Path: r.Dir}}}
+		remote, err := s.remoteLocations(r.Sphere, r.Row.Path)
+		if err != nil {
+			return nil, err
+		}
+		it.Locations = append(it.Locations, remote...)
 		if req.Version != "" {
 			if !slices.Contains(names, req.Version) {
 				return nil, userErr("artefact %s has no version %s; its versions: %s", r.ID, req.Version, strings.Join(names, ", "))
@@ -189,17 +196,42 @@ func (s *Store) ConfirmErase(code string) (*Proof, error) {
 	}
 	proof := &Proof{Erased: []ErasedItem{}, Locations: []PurgedLocation{}, NotCovered: notCovered}
 	for _, it := range plan.Items {
-		e, loc, err := s.eraseItem(it)
+		e, locs, err := s.eraseItem(it)
 		if err != nil {
 			return proof, err
 		}
 		proof.Erased = append(proof.Erased, e)
-		proof.Locations = append(proof.Locations, loc)
+		proof.Locations = append(proof.Locations, locs...)
 	}
 	return proof, nil
 }
 
-func (s *Store) eraseItem(it PlanItem) (ErasedItem, PurgedLocation, error) {
+func (s *Store) eraseItem(it PlanItem) (ErasedItem, []PurgedLocation, error) {
+	e, loc, err := s.eraseLocal(it)
+	if err != nil {
+		return e, []PurgedLocation{loc}, err
+	}
+	locs := []PurgedLocation{loc}
+	sphere, _, _ := strings.Cut(strings.TrimPrefix(it.URI, "artefact://"), "/")
+	ctx := context.Background()
+	for _, st := range s.syncObject(ctx, sphere, it.rel) {
+		pl := PurgedLocation{URI: it.URI, Backend: st.Backend, Verified: len(st.Errors) == 0}
+		if pl.Verified && it.Whole {
+			if left, err := s.BackendFiles(ctx, sphere, st.Backend); err == nil {
+				for _, f := range left {
+					if strings.HasPrefix(f, it.rel+"/") {
+						pl.Verified = false
+						break
+					}
+				}
+			}
+		}
+		locs = append(locs, pl)
+	}
+	return e, locs, nil
+}
+
+func (s *Store) eraseLocal(it PlanItem) (ErasedItem, PurgedLocation, error) {
 	r, err := s.Resolve(it.URI)
 	if err != nil {
 		return ErasedItem{}, PurgedLocation{}, err

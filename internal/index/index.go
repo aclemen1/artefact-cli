@@ -37,6 +37,23 @@ CREATE TABLE IF NOT EXISTS holders (
   PRIMARY KEY (id, by, ref)
 );
 CREATE INDEX IF NOT EXISTS holders_by ON holders(by, ref);
+CREATE TABLE IF NOT EXISTS remote_files (
+  backend   TEXT NOT NULL,
+  path      TEXT NOT NULL,   -- local path, relative to the sphere's storage root
+  remote    TEXT NOT NULL,   -- path on the backend (".age" added when encrypted)
+  sha256    TEXT NOT NULL,   -- of the local file
+  rsha256   TEXT NOT NULL,   -- of what was sent
+  size      INTEGER NOT NULL,-- of what was sent
+  synced    TEXT NOT NULL,
+  verified  TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (backend, path)
+);
+CREATE TABLE IF NOT EXISTS local_files (
+  path   TEXT PRIMARY KEY,
+  size   INTEGER NOT NULL,
+  mtime  INTEGER NOT NULL,
+  sha256 TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS keys (
   key    TEXT PRIMARY KEY,
   id     TEXT NOT NULL,
@@ -281,4 +298,84 @@ func (x *Index) Usage() (Usage, error) {
 	}
 	err := x.db.QueryRow(`SELECT COUNT(*) FROM holders`).Scan(&u.Holders)
 	return u, err
+}
+
+// RemoteFile is one file copied to a backend.
+type RemoteFile struct {
+	Backend, Path, Remote, SHA256, RSHA256 string
+	Size                                   int64
+	Synced, Verified                       string
+}
+
+func (x *Index) PutRemote(f RemoteFile) error {
+	_, err := x.db.Exec(`INSERT INTO remote_files (backend, path, remote, sha256, rsha256, size, synced, verified) VALUES (?,?,?,?,?,?,?,?)
+		ON CONFLICT(backend, path) DO UPDATE SET remote=excluded.remote, sha256=excluded.sha256, rsha256=excluded.rsha256,
+		size=excluded.size, synced=excluded.synced, verified=excluded.verified`,
+		f.Backend, f.Path, f.Remote, f.SHA256, f.RSHA256, f.Size, f.Synced, f.Verified)
+	return err
+}
+
+func (x *Index) DeleteRemote(backend, path string) error {
+	_, err := x.db.Exec(`DELETE FROM remote_files WHERE backend = ? AND path = ?`, backend, path)
+	return err
+}
+
+func (x *Index) SetVerified(backend, path, at string) error {
+	_, err := x.db.Exec(`UPDATE remote_files SET verified = ? WHERE backend = ? AND path = ?`, at, backend, path)
+	return err
+}
+
+// Remotes lists the copied files of backend under prefix ("" for all).
+func (x *Index) Remotes(backend, prefix string) ([]RemoteFile, error) {
+	rows, err := x.db.Query(`SELECT backend, path, remote, sha256, rsha256, size, synced, verified FROM remote_files
+		WHERE backend = ? AND path LIKE ? ESCAPE '\' ORDER BY path`, backend, likePrefix(prefix))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RemoteFile
+	for rows.Next() {
+		var f RemoteFile
+		if err := rows.Scan(&f.Backend, &f.Path, &f.Remote, &f.SHA256, &f.RSHA256, &f.Size, &f.Synced, &f.Verified); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// RemoteBackends lists the backends that hold files under prefix.
+func (x *Index) RemoteBackends(prefix string) ([]string, error) {
+	rows, err := x.db.Query(`SELECT DISTINCT backend FROM remote_files WHERE path LIKE ? ESCAPE '\' ORDER BY backend`, likePrefix(prefix))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var b string
+		if err := rows.Scan(&b); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+func likePrefix(p string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(p) + "%"
+}
+
+// LocalHash returns the cached SHA-256 of a local file, if size and mtime match.
+func (x *Index) LocalHash(path string, size, mtime int64) (string, bool) {
+	var sha string
+	err := x.db.QueryRow(`SELECT sha256 FROM local_files WHERE path = ? AND size = ? AND mtime = ?`, path, size, mtime).Scan(&sha)
+	return sha, err == nil
+}
+
+func (x *Index) PutLocalHash(path string, size, mtime int64, sha string) error {
+	_, err := x.db.Exec(`INSERT INTO local_files (path, size, mtime, sha256) VALUES (?,?,?,?)
+		ON CONFLICT(path) DO UPDATE SET size=excluded.size, mtime=excluded.mtime, sha256=excluded.sha256`, path, size, mtime, sha)
+	return err
 }

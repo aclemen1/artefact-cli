@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -106,12 +107,24 @@ func (s *Store) stageFile(sphere string, r io.Reader, seal bool) (path string, s
 }
 
 type SealResult struct {
-	ID             string   `json:"id"`
-	URI            string   `json:"uri"`
-	Status         string   `json:"status"` // sealed | already_sealed
-	VersionsErased int      `json:"versions_erased"`
-	Digest         string   `json:"digest"`
-	ClearRemainsIn []string `json:"clear_remains_in"`
+	ID             string      `json:"id"`
+	URI            string      `json:"uri"`
+	Status         string      `json:"status"` // sealed | already_sealed
+	VersionsErased int         `json:"versions_erased"`
+	Digest         string      `json:"digest"`
+	Backends       []SyncStats `json:"backends,omitempty"`
+	ClearRemainsIn []string    `json:"clear_remains_in"`
+}
+
+// pendingBackends lists the backends a sync could not bring up to date.
+func pendingBackends(stats []SyncStats) []string {
+	var out []string
+	for _, st := range stats {
+		if len(st.Errors) > 0 {
+			out = append(out, "backend "+st.Backend+" (retried at the next sync)")
+		}
+	}
+	return out
 }
 
 // notCovered lists the copies erasure and sealing cannot reach.
@@ -186,15 +199,18 @@ func (s *Store) Seal(ref string) (*SealResult, error) {
 		return nil, err
 	}
 	res.Status, res.VersionsErased, res.Digest = "sealed", n, c.Digest
+	res.Backends = s.syncObject(context.Background(), r.Sphere, r.Row.Path)
+	res.ClearRemainsIn = append(append([]string{}, notCovered...), pendingBackends(res.Backends)...)
 	return res, nil
 }
 
 type RedactResult struct {
-	ID             string `json:"id"`
-	URI            string `json:"uri"`
-	Version        int    `json:"version"`
-	Digest         string `json:"digest"`
-	VersionsErased int    `json:"versions_erased"`
+	ID             string      `json:"id"`
+	URI            string      `json:"uri"`
+	Version        int         `json:"version"`
+	Digest         string      `json:"digest"`
+	VersionsErased int         `json:"versions_erased"`
+	Backends       []SyncStats `json:"backends,omitempty"`
 }
 
 // Redact adds a version made from file; with purge, the earlier versions
@@ -266,5 +282,9 @@ func (s *Store) Redact(ref, file string, purge bool) (*RedactResult, error) {
 	if err := s.saveCard(r, c, at); err != nil {
 		return nil, err
 	}
-	return &RedactResult{ID: c.ID, URI: URI(r.Sphere, c.ID), Version: c.Version, Digest: c.Digest, VersionsErased: erased}, nil
+	res := &RedactResult{ID: c.ID, URI: URI(r.Sphere, c.ID), Version: c.Version, Digest: c.Digest, VersionsErased: erased}
+	if purge {
+		res.Backends = s.syncObject(context.Background(), r.Sphere, r.Row.Path)
+	}
+	return res, nil
 }

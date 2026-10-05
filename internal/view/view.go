@@ -30,6 +30,8 @@ type Tree struct {
 	order   []string
 	fetched time.Time
 	started time.Time
+	plans   *pnode
+	plansAt time.Time
 }
 
 func New(st *store.Store, sphere string) *Tree {
@@ -109,6 +111,8 @@ func (t *Tree) Stat(p string) (*Info, error) {
 	switch {
 	case len(parts) == 0:
 		return t.dir("/"), nil
+	case parts[0] == "plans":
+		return t.statPlans(parts[len(parts)-1], parts[1:])
 	case parts[0] != "a":
 		return nil, fs.ErrNotExist
 	case len(parts) == 1:
@@ -158,7 +162,9 @@ func (t *Tree) ReadDir(p string) ([]*Info, error) {
 	parts := clean(p)
 	switch {
 	case len(parts) == 0:
-		return []*Info{t.dir("a")}, nil
+		return []*Info{t.dir("a"), t.dir("plans")}, nil
+	case parts[0] == "plans":
+		return t.readPlans(parts[1:])
 	case parts[0] != "a" || len(parts) > 2:
 		return nil, fs.ErrNotExist
 	}

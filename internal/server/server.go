@@ -196,7 +196,7 @@ func (h *Server) action(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		if a.Name != "put" {
+		if a.Name != "put" && a.Name != "which" {
 			writeError(w, spec.UserError("send the parameters of %s as a JSON object (Content-Type: application/json)", a.Name))
 			return
 		}
@@ -381,12 +381,14 @@ func (h *Server) Serve(ctx context.Context, socketPath, httpAddr string) error {
 		return fmt.Errorf("nothing to serve: give --socket or --http")
 	}
 	var mountedDirs []string
-	for sp, dir := range h.Cfg.Views.Mounts {
-		if err := Mount(h.Cfg, sp, dir); err != nil {
-			fmt.Fprintf(os.Stderr, "artefact serve: %v\n", err)
-			continue
+	for sp, dirs := range h.Cfg.Views.Mounts {
+		for _, dir := range dirs {
+			if err := Mount(h.Cfg, sp, dir); err != nil {
+				fmt.Fprintf(os.Stderr, "artefact serve: %v\n", err)
+				continue
+			}
+			mountedDirs = append(mountedDirs, dir)
 		}
-		mountedDirs = append(mountedDirs, dir)
 	}
 	defer func() {
 		for _, d := range mountedDirs {

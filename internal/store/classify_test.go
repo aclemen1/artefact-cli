@@ -275,3 +275,25 @@ func TestSearch(t *testing.T) {
 		t.Errorf("after reindex: %v", hits)
 	}
 }
+
+func TestWhich(t *testing.T) {
+	s := sealedStore(t)
+	clear := put(t, s, "facture électricité", PutOptions{Filename: "f.pdf", Holds: []index.Holder{{By: "mnemo", Ref: "C1"}}})
+	sealed := put(t, s, "codes 2FA", PutOptions{Filename: "c.txt", Seal: true})
+	r, err := s.Which(strings.NewReader("facture électricité"), "")
+	if err != nil || !r.Found || r.ID != clear.ID || len(r.Holders) != 1 || r.Holders[0].By != "mnemo" {
+		t.Fatalf("clear: %+v %v", r, err)
+	}
+	if r, _ := s.Which(strings.NewReader("codes 2FA"), "perso"); !r.Found || r.ID != sealed.ID || !r.Sealed {
+		t.Errorf("sealed by its clear content: %+v", r)
+	}
+	if r, _ := s.Which(strings.NewReader("absent"), ""); r.Found {
+		t.Errorf("absent: %+v", r)
+	}
+	if r, _ := s.Which(strings.NewReader("facture électricité"), "pro"); r.Found {
+		t.Error("a perso artefact found in pro")
+	}
+	if l, _ := s.List("", index.Filter{}); len(l) != 2 {
+		t.Errorf("which must write nothing: %d artefacts", len(l))
+	}
+}

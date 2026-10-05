@@ -350,3 +350,12 @@ func (s *Store) ApplyArchive(due []Due) ([]Due, error) {
 	}
 	return due, nil
 }
+
+// ClassMembers gives the place of every artefact of sphere in plan.
+func (s *Store) ClassMembers(sphere, plan string) (map[string]index.ClassRow, error) {
+	x, err := s.index(sphere)
+	if err != nil {
+		return nil, err
+	}
+	return x.Classified(plan)
+}

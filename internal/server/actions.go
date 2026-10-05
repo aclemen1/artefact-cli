@@ -249,7 +249,10 @@ func Locate(cfg *config.Config, st *store.Store, id string) (path, from string, 
 	if ref.Row.Sealed {
 		return "", "", spec.UserError("artefact %s is sealed; read it with `artefact get %s --reveal --out <file>`", ref.ID, ref.ID)
 	}
-	if dir, ok := cfg.Views.Mounts[ref.Sphere]; ok && mounted(config.Expand(dir)) {
+	for _, dir := range cfg.Views.Mounts[ref.Sphere] {
+		if !mounted(config.Expand(dir)) {
+			continue
+		}
 		p := filepath.Join(config.Expand(dir), "a", ref.ID+ref.Row.Ext)
 		if _, err := os.Stat(p); err == nil {
 			return p, "view", nil

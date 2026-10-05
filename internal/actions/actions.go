@@ -634,3 +634,36 @@ func init() {
 		},
 	})
 }
+
+func init() {
+	spec.Register(&spec.Action{
+		Category: "artefacts", Name: "which", Right: "read",
+		Summary:    "Find, without writing anything, the artefact that holds exactly the content of a file.",
+		Discussion: "Looks up the file's SHA-256 among clear artefacts, and the keyed digest of the sphere among sealed ones (this needs the sphere's age key, from the keychain or $ARTEFACT_AGE_IDENTITY_<SPHERE>; without it, notes says so). Returns found false when no artefact holds it. Nothing is created, unlike put.",
+		Params: []spec.Param{
+			{Name: "file", Kind: spec.String, Positional: true, Required: true, Help: "File to look up, or - for standard input."},
+			{Name: "sphere", Kind: spec.String, Help: "Look in this sphere only. Defaults to every granted sphere."},
+		},
+		Examples: []string{"artefact which ~/offices/perso/inbox/facture.pdf", "artefact which scan.pdf --sphere perso", "cat note.md | artefact which -"},
+		Effects:  []string{"Reads only."},
+		Run: func(ctx *spec.Context) (any, error) {
+			return run(ctx, func(s *store.Store) (any, error) {
+				var r io.Reader
+				if f := ctx.Str("file"); f == "-" {
+					r = ctx.Stdin
+				} else {
+					if !localPaths(ctx) {
+						return nil, spec.UserError("this server does not read local paths; send the content as standard input (file \"-\")")
+					}
+					fh, err := os.Open(config.Expand(f))
+					if err != nil {
+						return nil, spec.UserError("cannot read %q: %v", f, err)
+					}
+					defer fh.Close()
+					r = fh
+				}
+				return s.Which(r, ctx.Str("sphere"))
+			})
+		},
+	})
+}

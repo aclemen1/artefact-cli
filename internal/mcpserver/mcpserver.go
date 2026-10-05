@@ -65,8 +65,8 @@ func schemaOf(a *spec.Action, access *spec.Access) map[string]any {
 			required = append(required, p.Name)
 		}
 	}
-	if a.Name == "put" {
-		props["content_base64"] = map[string]any{"type": "string", "description": "Payload, base64-encoded, instead of file."}
+	if a.Name == "put" || a.Name == "which" {
+		props["content_base64"] = map[string]any{"type": "string", "description": "Content, base64-encoded, instead of file."}
 		props["file"].(map[string]any)["description"] = "Path of a file on this machine, when the server shares its files; otherwise use content_base64 with filename."
 		required = nil
 	}
@@ -152,7 +152,7 @@ func New(cfgPath string, access *spec.Access, version string) *mcp.Server {
 
 func call(cfgPath string, a *spec.Action, access *spec.Access, in map[string]any) *mcp.CallToolResult {
 	var stdin *bytes.Reader
-	if a.Name == "put" {
+	if a.Name == "put" || a.Name == "which" {
 		if b64, ok := in["content_base64"].(string); ok {
 			raw, err := base64.StdEncoding.DecodeString(b64)
 			if err != nil {
@@ -162,7 +162,7 @@ func call(cfgPath string, a *spec.Action, access *spec.Access, in map[string]any
 			delete(in, "content_base64")
 			in["file"] = "-"
 		} else if _, ok := in["file"]; !ok {
-			return envelope(nil, spec.UserError("put needs content_base64 with filename, or file on a server that shares this machine's files"))
+			return envelope(nil, spec.UserError("%s needs content_base64, or file on a server that shares this machine's files", a.Name))
 		}
 	}
 	args, err := spec.ArgsFrom(a, in)

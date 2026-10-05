@@ -138,7 +138,13 @@ func Mount(cfg *config.Config, sphere, dir string) error {
 		return err
 	}
 	if mounted(dir) {
-		return nil
+		// A view mounted by an earlier serve answers no more: mount it again.
+		if _, err := os.ReadDir(dir); err == nil {
+			return nil
+		}
+		if err := Unmount(dir); err != nil {
+			return err
+		}
 	}
 	out, err := exec.Command("/sbin/mount", "-t", "nfs", "-o", MountOptions(port), "127.0.0.1:/", dir).CombinedOutput()
 	if err != nil {

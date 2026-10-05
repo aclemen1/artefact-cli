@@ -102,8 +102,33 @@ type Views struct {
 	NFS []string `yaml:"nfs,omitempty"`
 	// DisableNFS turns the NFS views off.
 	DisableNFS bool `yaml:"disable_nfs,omitempty"`
-	// Mounts maps a sphere to the directory serve mounts its view on.
-	Mounts map[string]string `yaml:"mounts,omitempty"`
+	// Mounts maps a sphere to the directories serve mounts its view on: one
+	// directory, or a list.
+	Mounts map[string]Dirs `yaml:"mounts,omitempty"`
+}
+
+// Dirs is one directory or a list of them; YAML takes either form.
+type Dirs []string
+
+func (d *Dirs) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		*d = Dirs{n.Value}
+		return nil
+	}
+	var l []string
+	if err := n.Decode(&l); err != nil {
+		return err
+	}
+	*d = l
+	return nil
+}
+
+// MarshalYAML writes a single directory as a plain string.
+func (d Dirs) MarshalYAML() (any, error) {
+	if len(d) == 1 {
+		return d[0], nil
+	}
+	return []string(d), nil
 }
 
 // NFSSpheres are the spheres whose view serve exports over NFS.

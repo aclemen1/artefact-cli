@@ -1,6 +1,9 @@
 package store
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/aclemen1/artefact-cli/internal/index"
+	"github.com/aclemen1/artefact-cli/internal/keys"
 	"github.com/aclemen1/artefact-cli/internal/ocfl"
 )
 
@@ -152,4 +156,75 @@ func (s *Store) RebuildSearch(sphere string) ([]ReindexResult, error) {
 		out = append(out, ReindexResult{Sphere: sp, Artefacts: n})
 	}
 	return out, nil
+}
+
+// WhichResult is what a lookup by content found in one sphere.
+type WhichResult struct {
+	Found    bool           `json:"found"`
+	Sphere   string         `json:"sphere,omitempty"`
+	ID       string         `json:"id,omitempty"`
+	URI      string         `json:"uri,omitempty"`
+	Title    string         `json:"title,omitempty"`
+	Sealed   bool           `json:"sealed,omitempty"`
+	Archived string         `json:"archived,omitempty"`
+	Holders  []index.Holder `json:"holders,omitempty"`
+	Digest   string         `json:"digest"`          // sha256 of the content looked up
+	Checked  []string       `json:"checked"`         // spheres searched
+	Notes    []string       `json:"notes,omitempty"` // e.g. a sphere whose sealed artefacts could not be checked
+}
+
+// Which finds, without writing anything, the artefact that holds exactly
+// the content read from r: by its SHA-256 among clear artefacts, and by the
+// keyed digest of the sphere among sealed ones (which needs the sphere's key).
+func (s *Store) Which(r io.Reader, sphere string) (*WhichResult, error) {
+	spheres := s.Spheres
+	if sphere != "" {
+		sp, err := s.sphereOrDefault(sphere)
+		if err != nil {
+			return nil, err
+		}
+		spheres = []string{sp}
+	}
+	h := sha256.New()
+	writers := []io.Writer{h}
+	keyed := map[string]func() string{}
+	res := &WhichResult{Checked: spheres}
+	for _, sp := range spheres {
+		id, err := s.Keys.Identity(sp)
+		if err != nil {
+			res.Notes = append(res.Notes, "sphere "+sp+": no age key here, so sealed artefacts were not checked")
+			continue
+		}
+		w, sum := keys.Keyed(keys.DedupKey(id))
+		writers = append(writers, w)
+		keyed[sp] = sum
+	}
+	if _, err := io.Copy(io.MultiWriter(writers...), r); err != nil {
+		return nil, err
+	}
+	res.Digest = "sha256:" + hex.EncodeToString(h.Sum(nil))
+	for _, sp := range spheres {
+		x, err := s.index(sp)
+		if err != nil {
+			return nil, err
+		}
+		row, err := x.ByDigest(res.Digest)
+		if errors.Is(err, index.ErrNotFound) && keyed[sp] != nil {
+			row, err = x.ByKeyed(keyed[sp]())
+		}
+		if errors.Is(err, index.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		hs, err := x.Holders(row.ID)
+		if err != nil {
+			return nil, err
+		}
+		res.Found, res.Sphere, res.ID, res.URI, res.Title = true, sp, row.ID, URI(sp, row.ID), row.Title
+		res.Sealed, res.Archived, res.Holders = row.Sealed, row.Archived, hs
+		return res, nil
+	}
+	return res, nil
 }

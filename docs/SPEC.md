@@ -226,6 +226,9 @@ backend (local disk by default).
 | `put <file\|-> [--sphere] [--title] [--date] [--seal] [--hold <by>:<ref>] [--card <yaml>] [--key <key>] [--render text] [--render-timeout 30s]` | deposits; idempotent within the sphere; returns `{id, version, status: created\|known, holders, rendition}` |
 | `get <id> [--version vN] [--reveal] [--out <path>] [--rendition <name>]` | writes the payload or a rendition |
 | `stat <id>...` | card, versions, holders, renditions, locations and their last fixity check; one or many ids |
+| `which <file\|->  [--sphere]` | without writing anything, the artefact that holds exactly this content: by SHA-256 among clear artefacts, by the sphere's keyed digest among sealed ones; `found: false` otherwise |
+| `search <words> [--sphere] [--state]` | full-text search of titles, file names, cards and text contents (FTS5, accents ignored); a sealed artefact by its card only |
+| `archive <id>...`, `unarchive <id>...` | the archived state: kept, replicated, reachable by id and view path, hidden from lists |
 | `ls [--sphere] [--class <plan>:<node>] [--held-by <tool>[:<ref>]] [--orphaned] [--sealed] [--since]` | lists artefacts |
 | `render <id> [--wait]` | asks `lector` for the text rendition again |
 | `du [--sphere]` | count and size of artefacts, payloads and renditions |
@@ -314,6 +317,11 @@ backends:
   Drive's consent in the browser, with the scope `drive.file` (the remote
   sees only the files artefact creates) and `use_trash: false` (deletions
   are final). `--remote <path>` takes any rclone remote path as it is.
+- `artefact backend reconnect <name> --client-id … --client-secret …` sets
+  up a Drive remote again with the user's own OAuth client (rclone's shared
+  client is rate-limited and retired in 2026). Drive limits file creation
+  to about one per second and per account: a first copy of 10,000 files
+  takes about three hours.
 
 ### 6.2 What travels
 
@@ -557,8 +565,15 @@ Tree of one sphere's view (the NFS mount root, or `/dav/<sphere>/`):
 a/<ulid><ext>                                   # current version: the stable path to cite
 a/<ulid>/v<N><ext>                              # fixed versions
 a/<ulid>/renditions/text.md                     # phase 7
-plans/<plan>/<notation> <label>/<title><ext>    # phase 8
+plans/<plan>/<notation> <label>/…/<title><ext> # by class
+plans/<plan>/_unclassified/<title><ext>         # not placed yet, or pending at the top
 ```
+
+- `plans/` files every active, unsealed artefact under its title (with
+  `/` and `:` replaced by `-`, and the extension added when the title lacks
+  it), in the folder of its node; two equal titles get the end of their id.
+  A path in `plans/` changes when the artefact is classified again: cite
+  `a/<id><ext>`, which never changes.
 
 - `<ext>` is the card's `ext`: the lower-cased extension of the deposited
   file name, fixed at deposit. Neither `card --set filename` nor `redact`
@@ -573,8 +588,11 @@ plans/<plan>/<notation> <label>/<title><ext>    # phase 8
   administrator rights, with the options `vers=3,tcp,nolocks,rdonly,soft,
   intr,timeo=10,retrans=2,nobrowse`: `soft` keeps readers from hanging when
   serve stops. `artefact unmount <dir>` undoes it.
-- serve mounts the directories of `views.mounts` (`{perso: ~/mnemo/perso/
-  _artefacts}`) once it listens, and unmounts them when it stops.
+- serve mounts the directories of `views.mounts` once it listens, and
+  unmounts them when it stops. A sphere takes one directory or a list:
+  `{perso: [~/mnemo/perso/_artefacts, ~/artefacts], pro: ~/mnemo/pro/_artefacts}`.
+  A directory still mounted by an earlier serve is unmounted and mounted
+  again.
 - NFSv3 trusts the address and the uid: the NFS servers listen on
   `127.0.0.1` only, and any local user of the Mac can mount them. The views
   hold no sealed artefact.

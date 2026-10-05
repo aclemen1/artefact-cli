@@ -363,7 +363,7 @@ func (s *Store) Put(r io.Reader, o PutOptions) (*PutResult, error) {
 	at := now.Format(time.RFC3339)
 	c := &Card{
 		ID: id, Sphere: sphere, Title: title, Date: date, Mime: mt, Size: size,
-		Filename: filepath.Base(o.Filename), Version: 1, Digest: digest, Sealed: sl != nil, Keyed: keyed,
+		Filename: filepath.Base(o.Filename), Ext: ext, Version: 1, Digest: digest, Sealed: sl != nil, Keyed: keyed,
 		Deposited: at, Updated: at, Holders: []index.Holder{},
 	}
 	if c.Filename == "." {
@@ -379,9 +379,15 @@ func (s *Store) Put(r io.Reader, o PutOptions) (*PutResult, error) {
 		h.At = at
 		c.addHolder(h)
 	}
-	var detail map[string]any
+	detail := map[string]any{}
 	if o.Key != "" {
-		detail = map[string]any{"key": o.Key}
+		detail["key"] = o.Key
+	}
+	if c.Filename != "" {
+		detail["filename"] = c.Filename
+	}
+	if len(detail) == 0 {
+		detail = nil
 	}
 	if err := writeCard(staged.Dir, c); err != nil {
 		staged.Abort()
@@ -478,7 +484,7 @@ func (s *Store) saveCard(ref *Ref, c *Card, at string) error {
 
 func rowOf(c *Card, rel string) index.Row {
 	return index.Row{ID: c.ID, Digest: c.Digest, Title: c.Title, Filename: c.Filename, Mime: c.Mime, Size: c.Size,
-		Date: c.Date, Version: c.Version, Sealed: c.Sealed, Deposited: c.Deposited, Updated: c.Updated, Path: rel, Keyed: c.Keyed}
+		Date: c.Date, Version: c.Version, Sealed: c.Sealed, Deposited: c.Deposited, Updated: c.Updated, Path: rel, Keyed: c.Keyed, Ext: c.Ext}
 }
 
 func detectMime(path, ext string) string {
@@ -839,6 +845,9 @@ func (s *Store) reindex(sphere string) (ReindexResult, error) {
 		if c.Sphere != sphere {
 			return fmt.Errorf("object %s carries sphere %q in the store of %q", dir, c.Sphere, sphere)
 		}
+		if c.Ext == "" {
+			c.Ext = payloadExt(dir)
+		}
 		rel, _ := filepath.Rel(root, dir)
 		if err := x.Put(rowOf(c, rel), c.Holders); err != nil {
 			return err
@@ -876,4 +885,74 @@ func (s *Store) FindDigest(sphere, digest string) (string, error) {
 		return "", &NotFound{fmt.Sprintf("no artefact with digest %s in sphere %s", digest, sp)}
 	}
 	return row.ID, err
+}
+
+// ViewRows lists the unsealed artefacts of sphere, for the file views.
+func (s *Store) ViewRows(sphere string) ([]index.Row, error) {
+	x, err := s.index(sphere)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := x.List(index.Filter{})
+	if err != nil {
+		return nil, err
+	}
+	out := rows[:0]
+	for _, r := range rows {
+		if !r.Sealed {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// VersionFile is the content file of one version of an artefact.
+type VersionFile struct {
+	Version string
+	Path    string
+	Created time.Time
+}
+
+// VersionFiles lists the payload of every version of an unsealed artefact.
+func (s *Store) VersionFiles(sphere, id string) ([]VersionFile, error) {
+	r, err := s.Resolve(URI(sphere, id))
+	if err != nil {
+		return nil, err
+	}
+	if r.Row.Sealed {
+		return nil, &NotFound{"sealed"}
+	}
+	inv, err := ocfl.ReadInventory(r.Dir)
+	if err != nil {
+		return nil, err
+	}
+	var out []VersionFile
+	for _, v := range inv.VersionNames() {
+		files, err := inv.Files(v)
+		if err != nil {
+			return nil, err
+		}
+		for _, f := range files {
+			if strings.HasPrefix(f.Logical, "payload") {
+				created, _ := time.Parse(time.RFC3339, inv.Versions[v].Created)
+				out = append(out, VersionFile{Version: v, Path: ocfl.ContentPath(r.Dir, f), Created: created})
+			}
+		}
+	}
+	return out, nil
+}
+
+// payloadExt is the extension of the payload's logical name, without .age.
+func payloadExt(objDir string) string {
+	inv, err := ocfl.ReadInventory(objDir)
+	if err != nil {
+		return ""
+	}
+	files, _ := inv.Files("")
+	for _, f := range files {
+		if strings.HasPrefix(f.Logical, "payload") {
+			return filepath.Ext(strings.TrimSuffix(f.Logical, ".age"))
+		}
+	}
+	return ""
 }

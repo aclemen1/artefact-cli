@@ -536,27 +536,49 @@ contract: deposits, seals and erasures go through the actions.
 Tree of one sphere's view (the NFS mount root, or `/dav/<sphere>/`):
 
 ```
-a/<ulid>.<ext>                                  # current version: the stable path to cite
-a/<ulid>/v<N>.<ext>                             # fixed versions
-a/<ulid>/renditions/text.md
-plans/<plan>/<notation> <label>/<title>.<ext>   # browsing by class
+a/<ulid><ext>                                   # current version: the stable path to cite
+a/<ulid>/v<N><ext>                              # fixed versions
+a/<ulid>/renditions/text.md                     # phase 7
+plans/<plan>/<notation> <label>/<title><ext>    # phase 8
 ```
 
+- `<ext>` is the card's `ext`: the lower-cased extension of the deposited
+  file name, fixed at deposit. Neither `card --set filename` nor `redact`
+  changes it; a path in the view stays valid for the artefact's life.
 - A sealed artefact never appears in a view. It is read only through
   `get --reveal`.
-- A view shows only the spheres of its configuration: one mount per sphere
-  (`artefact mount --sphere perso <dir>`).
-- NFSv3 trusts the address and the uid: the NFS server listens on
-  `127.0.0.1` only and is never exposed to the network.
+- `artefact serve` exports one NFS server per sphere (`views.nfs`, default
+  every sphere; `views.disable_nfs` turns them off), each on its own
+  loopback port, published in `.artefact/nfs.json`. A mount therefore never
+  shows another sphere.
+- `artefact mount <dir> --sphere <s>` mounts a view as the user, without
+  administrator rights, with the options `vers=3,tcp,nolocks,rdonly,soft,
+  intr,timeo=10,retrans=2,nobrowse`: `soft` keeps readers from hanging when
+  serve stops. `artefact unmount <dir>` undoes it.
+- serve mounts the directories of `views.mounts` (`{perso: ~/mnemo/perso/
+  _artefacts}`) once it listens, and unmounts them when it stops.
+- NFSv3 trusts the address and the uid: the NFS servers listen on
+  `127.0.0.1` only, and any local user of the Mac can mount them. The views
+  hold no sealed artefact.
+- The WebDAV view answers `GET`, `HEAD`, `OPTIONS` and `PROPFIND`, and
+  refuses every write (405). The Finder sends the token as the password of
+  Basic authentication; any user name is accepted.
 - A later phase adds a write-only `inbox/` folder to each view: a file
   dropped there becomes a `put`.
 
 ### 11.2 The `artefact:` scheme
 
-A small macOS companion app, `Artefact.app`, registers the `artefact:` URL
-scheme. Opening `artefact://perso/<ulid>` opens the current version from the
-mounted view, or through `get`, in the default application. It is the only
-part of `artefact` written in Swift.
+A small macOS companion app, `Artefact.app` (`app/`, bundle id
+`aero.clement.artefact`, menu-bar-less), registers the `artefact:` URL
+scheme. Opening `artefact://perso/<ulid>` runs `artefact locate`, which
+returns the artefact's path in a mounted view, or else a copy (mode 0600)
+under `~/Library/Caches/artefact/open/<id>/`, and opens that path in the
+default application. A sealed artefact is refused with a message.
+
+`app/scripts/build-app.sh` builds and signs the app; `--install` copies it to
+`/Applications` and registers the scheme. The app finds the CLI through
+`$ARTEFACT_BIN`, then `~/.local/bin`, `~/go/bin`, `/opt/homebrew/bin` and
+`/usr/local/bin`. It is the only part of `artefact` written in Swift.
 
 ## 12. Spheres and access
 

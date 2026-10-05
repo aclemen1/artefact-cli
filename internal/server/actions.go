@@ -2,9 +2,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -16,6 +19,7 @@ import (
 	"github.com/aclemen1/artefact-cli/internal/config"
 	"github.com/aclemen1/artefact-cli/internal/mcpserver"
 	"github.com/aclemen1/artefact-cli/internal/spec"
+	"github.com/aclemen1/artefact-cli/internal/store"
 )
 
 func load(ctx *spec.Context) (*config.Config, string, error) {
@@ -158,6 +162,110 @@ func init() {
 				return nil, spec.UserError("%v", err)
 			}
 			return map[string]any{"token": secret, "name": pub.Name, "spheres": pub.Spheres, "rights": pub.Rights, "note": "shown once; store it in the client's keychain or configuration"}, nil
+		},
+	})
+}
+
+func init() {
+	spec.Register(&spec.Action{
+		Category: "ops", Name: "mount",
+		Summary:    "Mount a sphere's read-only NFS view on a directory; `artefact serve` must be running.",
+		Discussion: "The view shows a/<id><ext> (current version) and a/<id>/v<N><ext> for every unsealed artefact; the extension is fixed at deposit. Sealed artefacts never appear. serve also mounts the directories of views.mounts itself, and unmounts them when it stops.",
+		Params: []spec.Param{
+			{Name: "dir", Kind: spec.String, Positional: true, Required: true, Help: "Directory to mount on; created when absent."},
+			{Name: "sphere", Kind: spec.String, Help: "Sphere of the view. Defaults to the default sphere."},
+		},
+		Examples: []string{"artefact mount ~/mnemo/perso/_artefacts --sphere perso"},
+		Effects:  []string{"Mounts the view (read-only, soft) on the directory, as the current user."},
+		Run: func(ctx *spec.Context) (any, error) {
+			cfg, _, err := load(ctx)
+			if err != nil {
+				return nil, err
+			}
+			sp := ctx.Str("sphere")
+			if sp == "" {
+				sp = cfg.DefaultSphere
+			}
+			if err := Mount(cfg, sp, ctx.Str("dir")); err != nil {
+				return nil, spec.UserError("%v", err)
+			}
+			return map[string]any{"sphere": sp, "mounted": config.Expand(ctx.Str("dir"))}, nil
+		},
+	})
+	spec.Register(&spec.Action{
+		Category: "ops", Name: "unmount",
+		Summary:  "Unmount a view mounted by `artefact mount`.",
+		Params:   []spec.Param{{Name: "dir", Kind: spec.String, Positional: true, Required: true, Help: "Mounted directory."}},
+		Examples: []string{"artefact unmount ~/mnemo/perso/_artefacts"},
+		Effects:  []string{"Unmounts the directory; does nothing when no view is mounted there."},
+		Run: func(ctx *spec.Context) (any, error) {
+			if err := Unmount(ctx.Str("dir")); err != nil {
+				return nil, spec.UserError("%v", err)
+			}
+			return map[string]any{"unmounted": config.Expand(ctx.Str("dir"))}, nil
+		},
+	})
+}
+
+func init() {
+	spec.Register(&spec.Action{
+		Category: "ops", Name: "locate",
+		Summary:    "Give a local file path for an artefact: its place in a mounted view, or else a copy in the user's cache.",
+		Discussion: "Used by Artefact.app to open artefact:// links. A sealed artefact gets no path: it is read only with `artefact get --reveal`.",
+		Params:     []spec.Param{{Name: "id", Kind: spec.String, Positional: true, Required: true, Help: "Artefact id or URI."}},
+		Examples:   []string{"artefact locate artefact://perso/01K9B3T0Z6Q8M2C4R7V1X5N9PA"},
+		Effects:    []string{"Without a mounted view, writes a copy (mode 0600) under ~/Library/Caches/artefact/open/<id>/."},
+		Run: func(ctx *spec.Context) (any, error) {
+			cfg, _, err := load(ctx)
+			if err != nil {
+				return nil, err
+			}
+			st, err := store.Open(cfg, nil, "artefact-cli/"+actions.Version)
+			if err != nil {
+				return nil, err
+			}
+			defer st.Close()
+			ref, err := st.Resolve(ctx.Str("id"))
+			if err != nil {
+				var nf *store.NotFound
+				if errors.As(err, &nf) {
+					return nil, spec.NotFound("%s", nf.Msg)
+				}
+				return nil, spec.UserError("%v", err)
+			}
+			if ref.Row.Sealed {
+				return nil, spec.UserError("artefact %s is sealed; read it with `artefact get %s --reveal --out <file>`", ref.ID, ref.ID)
+			}
+			if dir, ok := cfg.Views.Mounts[ref.Sphere]; ok && mounted(config.Expand(dir)) {
+				p := filepath.Join(config.Expand(dir), "a", ref.ID+ref.Row.Ext)
+				if _, err := os.Stat(p); err == nil {
+					return map[string]any{"path": p, "from": "view"}, nil
+				}
+			}
+			name := ref.Row.Filename
+			if name == "" {
+				name = ref.ID + ref.Row.Ext
+			}
+			home, _ := os.UserHomeDir()
+			dir := filepath.Join(home, "Library", "Caches", "artefact", "open", ref.ID)
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				return nil, err
+			}
+			p := filepath.Join(dir, filepath.Base(name))
+			rc, _, err := st.OpenPayload(ref.ID, "", false)
+			if err != nil {
+				return nil, err
+			}
+			defer rc.Close()
+			f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := io.Copy(f, rc); err != nil {
+				f.Close()
+				return nil, err
+			}
+			return map[string]any{"path": p, "from": "cache"}, f.Close()
 		},
 	})
 }

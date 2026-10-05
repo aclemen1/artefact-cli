@@ -26,6 +26,7 @@ type Card struct {
 	Mime      string         `yaml:"mime" json:"mime"`
 	Size      int64          `yaml:"size" json:"size"`
 	Filename  string         `yaml:"filename,omitempty" json:"filename,omitempty"`
+	Ext       string         `yaml:"ext,omitempty" json:"ext,omitempty"` // payload extension, fixed at deposit
 	Version   int            `yaml:"version" json:"version"`
 	Digest    string         `yaml:"digest" json:"digest"`
 	Sealed    bool           `yaml:"sealed" json:"sealed"`

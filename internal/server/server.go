@@ -33,8 +33,9 @@ type Server struct {
 	Tokens  *access.Store
 	Version string
 
-	mu   sync.Mutex
-	mcps map[string]*mcp.Server
+	mu    sync.Mutex
+	mcps  map[string]*mcp.Server
+	views *Views
 }
 
 func New(cfgPath string, cfg *config.Config, version string) *Server {
@@ -50,6 +51,10 @@ func (h *Server) authenticate(local bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
 		secret, hasToken := strings.CutPrefix(auth, "Bearer ")
+		if _, pass, ok := r.BasicAuth(); ok && !hasToken {
+			// The Finder's WebDAV client sends the token as a password.
+			secret, hasToken = pass, true
+		}
 		var a *spec.Access
 		switch {
 		case hasToken:
@@ -77,6 +82,9 @@ func (h *Server) authenticate(local bool, next http.Handler) http.Handler {
 			a = &spec.Access{Spheres: h.Cfg.Spheres, Rights: access.Rights, Agent: agent, LocalPaths: true}
 		default:
 			w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
+			if strings.HasPrefix(r.URL.Path, "/dav/") {
+				w.Header().Set("WWW-Authenticate", `Basic realm="artefact"`)
+			}
 			writeError(w, &spec.Error{Code: 1, Kind: "unauthorized", Message: "a bearer token is required; create one with `artefact token create`"})
 			return
 		}
@@ -104,7 +112,16 @@ func (h *Server) Handler(local bool) http.Handler {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		fmt.Fprintf(w, "artefact %s — REST at /v1/<action>, MCP at /mcp\n", h.Version)
 	})
-	return h.authenticate(local, mux)
+	// /dav/ is routed before the mux: its subtree would clash with /{sphere}/….
+	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if rest, ok := strings.CutPrefix(r.URL.Path, "/dav/"); ok {
+			sphere, _, _ := strings.Cut(rest, "/")
+			h.serveDAV(w, r, sphere)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
+	return h.authenticate(local, root)
 }
 
 func (h *Server) mcpFor(a *spec.Access) *mcp.Server {
@@ -323,7 +340,23 @@ func ListenLoopback(addr string) (net.Listener, error) {
 // Serve runs until ctx ends.
 func (h *Server) Serve(ctx context.Context, socketPath, httpAddr string) error {
 	var servers []*http.Server
-	errc := make(chan error, 2)
+	errc := make(chan error, 8)
+	views, err := newViews(h.Cfg)
+	if err != nil {
+		return err
+	}
+	h.views = views
+	defer views.Close()
+	nfsListeners, err := h.startNFS(errc)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		for _, l := range nfsListeners {
+			l.Close()
+		}
+		os.Remove(nfsStatePath(h.Cfg))
+	}()
 	if socketPath != "" {
 		l, err := ListenSocket(socketPath)
 		if err != nil {
@@ -346,6 +379,21 @@ func (h *Server) Serve(ctx context.Context, socketPath, httpAddr string) error {
 	if len(servers) == 0 {
 		return fmt.Errorf("nothing to serve: give --socket or --http")
 	}
+	var mountedDirs []string
+	for sp, dir := range h.Cfg.Views.Mounts {
+		if err := Mount(h.Cfg, sp, dir); err != nil {
+			fmt.Fprintf(os.Stderr, "artefact serve: %v\n", err)
+			continue
+		}
+		mountedDirs = append(mountedDirs, dir)
+	}
+	defer func() {
+		for _, d := range mountedDirs {
+			if err := Unmount(d); err != nil {
+				fmt.Fprintf(os.Stderr, "artefact serve: %v\n", err)
+			}
+		}
+	}()
 	select {
 	case <-ctx.Done():
 	case err := <-errc:

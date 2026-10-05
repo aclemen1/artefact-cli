@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS artefacts (
   deposited TEXT NOT NULL,
   updated   TEXT NOT NULL,
   path      TEXT NOT NULL,
-  keyed     TEXT NOT NULL DEFAULT ''
+  keyed     TEXT NOT NULL DEFAULT '',
+  ext       TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS artefacts_digest ON artefacts(digest);
 CREATE TABLE IF NOT EXISTS holders (
@@ -55,8 +56,9 @@ type Row struct {
 	Sealed    bool   `json:"sealed"`
 	Deposited string `json:"deposited"`
 	Updated   string `json:"updated"`
-	Path      string `json:"-"` // object root, relative to the sphere's storage root
-	Keyed     string `json:"-"` // keyed digest of a sealed payload's plaintext
+	Path      string `json:"-"`   // object root, relative to the sphere's storage root
+	Keyed     string `json:"-"`   // keyed digest of a sealed payload's plaintext
+	Ext       string `json:"ext"` // payload extension, fixed at deposit
 }
 
 type Holder struct {
@@ -78,13 +80,15 @@ func Open(path string) (*Index, error) {
 		db.Close()
 		return nil, fmt.Errorf("index %s: %w", path, err)
 	}
-	// Indexes created before sealed artefacts lack the keyed column.
-	var n int
-	_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('artefacts') WHERE name = 'keyed'`).Scan(&n)
-	if n == 0 {
-		if _, err := db.Exec(`ALTER TABLE artefacts ADD COLUMN keyed TEXT NOT NULL DEFAULT ''`); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("index %s: %w", path, err)
+	// Indexes made by earlier versions lack the later columns.
+	for _, col := range []string{"keyed", "ext"} {
+		var n int
+		_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('artefacts') WHERE name = ?`, col).Scan(&n)
+		if n == 0 {
+			if _, err := db.Exec(`ALTER TABLE artefacts ADD COLUMN ` + col + ` TEXT NOT NULL DEFAULT ''`); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("index %s: %w", path, err)
+			}
 		}
 	}
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS artefacts_keyed ON artefacts(keyed)`); err != nil {
@@ -109,12 +113,12 @@ func (x *Index) Put(r Row, holders []Holder) error {
 		return err
 	}
 	defer tx.Rollback()
-	_, err = tx.Exec(`INSERT INTO artefacts (id, digest, title, filename, mime, size, date, version, sealed, deposited, updated, path, keyed)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+	_, err = tx.Exec(`INSERT INTO artefacts (id, digest, title, filename, mime, size, date, version, sealed, deposited, updated, path, keyed, ext)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET digest=excluded.digest, title=excluded.title, filename=excluded.filename,
 		mime=excluded.mime, size=excluded.size, date=excluded.date, version=excluded.version, sealed=excluded.sealed,
-		deposited=excluded.deposited, updated=excluded.updated, path=excluded.path, keyed=excluded.keyed`,
-		r.ID, r.Digest, r.Title, r.Filename, r.Mime, r.Size, r.Date, r.Version, r.Sealed, r.Deposited, r.Updated, r.Path, r.Keyed)
+		deposited=excluded.deposited, updated=excluded.updated, path=excluded.path, keyed=excluded.keyed, ext=excluded.ext`,
+		r.ID, r.Digest, r.Title, r.Filename, r.Mime, r.Size, r.Date, r.Version, r.Sealed, r.Deposited, r.Updated, r.Path, r.Keyed, r.Ext)
 	if err != nil {
 		return err
 	}
@@ -158,11 +162,11 @@ func (x *Index) Key(key string) (id, digest string, err error) {
 	return
 }
 
-const cols = `id, digest, title, filename, mime, size, date, version, sealed, deposited, updated, path, keyed`
+const cols = `id, digest, title, filename, mime, size, date, version, sealed, deposited, updated, path, keyed, ext`
 
 func scan(s interface{ Scan(...any) error }) (Row, error) {
 	var r Row
-	err := s.Scan(&r.ID, &r.Digest, &r.Title, &r.Filename, &r.Mime, &r.Size, &r.Date, &r.Version, &r.Sealed, &r.Deposited, &r.Updated, &r.Path, &r.Keyed)
+	err := s.Scan(&r.ID, &r.Digest, &r.Title, &r.Filename, &r.Mime, &r.Size, &r.Date, &r.Version, &r.Sealed, &r.Deposited, &r.Updated, &r.Path, &r.Keyed, &r.Ext)
 	return r, err
 }
 

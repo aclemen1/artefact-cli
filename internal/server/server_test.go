@@ -56,10 +56,16 @@ func start(t *testing.T) *env {
 	cfg, _ = config.Load(cfgPath)
 	srv := New(cfgPath, cfg, "test")
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- srv.Serve(ctx, sock, addr) }()
+	done := make(chan struct{})
+	var serveErr error
+	go func() { serveErr = srv.Serve(ctx, sock, addr); close(done) }()
 	t.Cleanup(func() { cancel(); <-done })
 	for i := 0; i < 100; i++ {
+		select {
+		case <-done:
+			t.Fatalf("serve stopped: %v", serveErr)
+		default:
+		}
 		if c, err := net.Dial("unix", sock); err == nil {
 			c.Close()
 			break

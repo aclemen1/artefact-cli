@@ -20,6 +20,7 @@ type Config struct {
 	Keys  map[string]string `yaml:"keys,omitempty"`
 	Erase Erase             `yaml:"erase,omitempty"`
 	Serve Serve             `yaml:"serve,omitempty"`
+	Views Views             `yaml:"views,omitempty"`
 
 	path string `yaml:"-"`
 }
@@ -31,6 +32,27 @@ type Erase struct {
 type Serve struct {
 	Socket string `yaml:"socket,omitempty"` // default ~/.local/state/artefact/sock
 	HTTP   string `yaml:"http,omitempty"`   // loopback address, e.g. 127.0.0.1:7780
+}
+
+// Views configures the read-only file views of `artefact serve`.
+type Views struct {
+	// NFS lists the spheres served over NFS; empty means every sphere.
+	NFS []string `yaml:"nfs,omitempty"`
+	// DisableNFS turns the NFS views off.
+	DisableNFS bool `yaml:"disable_nfs,omitempty"`
+	// Mounts maps a sphere to the directory serve mounts its view on.
+	Mounts map[string]string `yaml:"mounts,omitempty"`
+}
+
+// NFSSpheres are the spheres whose view serve exports over NFS.
+func (c *Config) NFSSpheres() []string {
+	if c.Views.DisableNFS {
+		return nil
+	}
+	if len(c.Views.NFS) > 0 {
+		return c.Views.NFS
+	}
+	return c.Spheres
 }
 
 // SocketPath is the Unix socket of `artefact serve`.

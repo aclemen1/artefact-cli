@@ -609,16 +609,20 @@ default application. A sealed artefact is refused with a message.
 
 ## 13. TUI
 
-`artefact tui`, Go and Bubble Tea v2, keys aligned on office's TUI.
+`artefact tui [--spheres <list>]`, Go and Bubble Tea v2, with the palette and
+keys of office's and mnemo's TUIs. It works on the store directly, like the
+CLI, within the spheres given.
 
-- List: artefacts of a sphere, filters by plan node, holder, orphaned,
-  sealed, below `numcopies`.
-- Detail: card, versions, renditions, locations and fixity, events.
-- Classification queue: artefacts below the threshold, with the decider's
-  candidates; one key accepts, another picks a node.
-- Review: dispositions due.
-- Actions: open the payload, edit the card in `$EDITOR`, classify, sync,
-  erase (plan shown, code typed).
+| View | Shows | Keys |
+|---|---|---|
+| list | sphere, date, version, type, size, title; ◆ marks a sealed artefact | `j`/`k`, `g`/`G`, `enter` detail, `o` open, `/` filter (title, file name, id, type), `s` cycles the spheres, `O` orphaned only, `r` refresh, `q` quit |
+| detail | card, Dublin Core, extensions, versions, holders, events (newest first) | `o` open, `e` edit the card in `$EDITOR`, `S` seal (type `yes`), `x` erase, `X` erase a held artefact, `j`/`k` scroll, `esc` back |
+
+- `o` opens through `locate`: from a mounted view, else from a cached copy.
+- `e` opens the editable fields (title, date, filename, mime, dc, x) as YAML;
+  what changed is saved with one `card` event.
+- `x` shows the erasure plan and asks for its code; any other input cancels.
+  `X` plans with `--force`, the human's override for a held artefact.
 
 ## 14. Contract with mnemo
 
@@ -744,7 +748,8 @@ serve: { http: 127.0.0.1:7780, socket: ~/.local/state/artefact/sock }
 7. **Renditions**: `lector` integration, `put --render`.
 8. **Classification**: plans, deciders (`rule`, `openjev`, `acp`), queue,
    `review`.
-9. **TUI**, then the `inbox/` folder of the views.
+9. **TUI** (done ahead of phases 5 to 8), then the `inbox/` folder of the
+   views.
 
 ## 17. References
 

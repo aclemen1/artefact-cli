@@ -20,6 +20,7 @@ import (
 	"github.com/aclemen1/artefact-cli/internal/mcpserver"
 	"github.com/aclemen1/artefact-cli/internal/spec"
 	"github.com/aclemen1/artefact-cli/internal/store"
+	"github.com/aclemen1/artefact-cli/internal/tui"
 )
 
 func load(ctx *spec.Context) (*config.Config, string, error) {
@@ -225,47 +226,85 @@ func init() {
 				return nil, err
 			}
 			defer st.Close()
-			ref, err := st.Resolve(ctx.Str("id"))
-			if err != nil {
-				var nf *store.NotFound
-				if errors.As(err, &nf) {
-					return nil, spec.NotFound("%s", nf.Msg)
-				}
-				return nil, spec.UserError("%v", err)
-			}
-			if ref.Row.Sealed {
-				return nil, spec.UserError("artefact %s is sealed; read it with `artefact get %s --reveal --out <file>`", ref.ID, ref.ID)
-			}
-			if dir, ok := cfg.Views.Mounts[ref.Sphere]; ok && mounted(config.Expand(dir)) {
-				p := filepath.Join(config.Expand(dir), "a", ref.ID+ref.Row.Ext)
-				if _, err := os.Stat(p); err == nil {
-					return map[string]any{"path": p, "from": "view"}, nil
-				}
-			}
-			name := ref.Row.Filename
-			if name == "" {
-				name = ref.ID + ref.Row.Ext
-			}
-			home, _ := os.UserHomeDir()
-			dir := filepath.Join(home, "Library", "Caches", "artefact", "open", ref.ID)
-			if err := os.MkdirAll(dir, 0o700); err != nil {
-				return nil, err
-			}
-			p := filepath.Join(dir, filepath.Base(name))
-			rc, _, err := st.OpenPayload(ref.ID, "", false)
+			p, from, err := Locate(cfg, st, ctx.Str("id"))
 			if err != nil {
 				return nil, err
 			}
-			defer rc.Close()
-			f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+			return map[string]any{"path": p, "from": from}, nil
+		},
+	})
+}
+
+// Locate gives a local path for an artefact: its place in a mounted view,
+// or a copy (mode 0600) in ~/Library/Caches/artefact/open/<id>/.
+func Locate(cfg *config.Config, st *store.Store, id string) (path, from string, err error) {
+	ref, err := st.Resolve(id)
+	if err != nil {
+		var nf *store.NotFound
+		if errors.As(err, &nf) {
+			return "", "", spec.NotFound("%s", nf.Msg)
+		}
+		return "", "", spec.UserError("%v", err)
+	}
+	if ref.Row.Sealed {
+		return "", "", spec.UserError("artefact %s is sealed; read it with `artefact get %s --reveal --out <file>`", ref.ID, ref.ID)
+	}
+	if dir, ok := cfg.Views.Mounts[ref.Sphere]; ok && mounted(config.Expand(dir)) {
+		p := filepath.Join(config.Expand(dir), "a", ref.ID+ref.Row.Ext)
+		if _, err := os.Stat(p); err == nil {
+			return p, "view", nil
+		}
+	}
+	name := ref.Row.Filename
+	if name == "" {
+		name = ref.ID + ref.Row.Ext
+	}
+	home, _ := os.UserHomeDir()
+	dir := filepath.Join(home, "Library", "Caches", "artefact", "open", ref.ID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", "", err
+	}
+	p := filepath.Join(dir, filepath.Base(name))
+	rc, _, err := st.OpenPayload(ref.ID, "", false)
+	if err != nil {
+		return "", "", err
+	}
+	defer rc.Close()
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return "", "", err
+	}
+	if _, err := io.Copy(f, rc); err != nil {
+		f.Close()
+		return "", "", err
+	}
+	return p, "cache", f.Close()
+}
+
+func init() {
+	spec.Register(&spec.Action{
+		Category: "ops", Name: "tui",
+		Summary:    "Browse the artefacts in the terminal: card, versions, holders, events; open, edit the card, seal, erase.",
+		Discussion: "Keys: enter detail, o open, / filter, s sphere, O orphaned only, r refresh, q quit; in a detail, e edits the card in $EDITOR, S seals, x erases (plan, then the code to type), X erases a held artefact.",
+		Params:     []spec.Param{{Name: "spheres", Kind: spec.String, Help: "Comma-separated spheres to show. Defaults to every configured sphere."}},
+		Examples:   []string{"artefact tui", "artefact tui --spheres perso"},
+		Effects:    []string{"Reads the store; edits, seals and erases only on an explicit key and confirmation."},
+		Meta:       true,
+		Run: func(ctx *spec.Context) (any, error) {
+			cfg, _, err := load(ctx)
 			if err != nil {
 				return nil, err
 			}
-			if _, err := io.Copy(f, rc); err != nil {
-				f.Close()
+			spheres, err := splitSpheres(cfg, ctx.Str("spheres"))
+			if err != nil {
 				return nil, err
 			}
-			return map[string]any{"path": p, "from": "cache"}, f.Close()
+			st, err := store.Open(cfg, spheres, "artefact-tui/"+actions.Version)
+			if err != nil {
+				return nil, err
+			}
+			defer st.Close()
+			return spec.Streamed{}, tui.Run(cfg, st, Locate)
 		},
 	})
 }

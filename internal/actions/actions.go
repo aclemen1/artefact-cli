@@ -366,14 +366,21 @@ func init() {
 	spec.Register(&spec.Action{
 		Category: "ops", Name: "key",
 		Summary:    "Create a sphere's age key: public key in the configuration, private key in the macOS keychain.",
-		Discussion: "Idempotent: when the keychain already holds the sphere's key, its public key is written back to the configuration and returned.",
+		Discussion: "init is idempotent: when the keychain already holds the sphere's key, its public key is written back to the configuration and returned. generate prints a new identity and its recipient and stores nothing: give the identity as $ARTEFACT_AGE_IDENTITY_<SPHERE> to a throwaway store, which then needs no keychain.",
 		Params: []spec.Param{
-			{Name: "verb", Kind: spec.String, Positional: true, Required: true, Enum: []string{"init"}, Help: "init"},
-			{Name: "sphere", Kind: spec.String, Required: true, Help: "Sphere of the key."},
+			{Name: "verb", Kind: spec.String, Positional: true, Required: true, Enum: []string{"init", "generate"}, Help: "init, or generate"},
+			{Name: "sphere", Kind: spec.String, Help: "Sphere of the key, for init."},
 		},
-		Examples: []string{"artefact key init --sphere perso"},
-		Effects:  []string{"Writes the identity into the login keychain (service artefact, account age-<sphere>) and the recipient into the configuration."},
+		Examples: []string{"artefact key init --sphere perso", "artefact key generate"},
+		Effects:  []string{"init: writes the identity into the login keychain (service artefact, account age-<sphere>) and the recipient into the configuration. generate: none."},
 		Run: func(ctx *spec.Context) (any, error) {
+			if ctx.Str("verb") == "generate" {
+				id, rcp, err := keys.Generate()
+				if err != nil {
+					return nil, err
+				}
+				return map[string]any{"identity": id, "recipient": rcp}, nil
+			}
 			cfg, err := config.Load(ctx.Config)
 			if err != nil {
 				return nil, spec.UserError("%v", err)

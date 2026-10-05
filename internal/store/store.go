@@ -223,13 +223,16 @@ type sealing struct {
 }
 
 func (s *Store) seal(sphere string, r io.Reader) (*sealing, error) {
-	recipient := s.Cfg.Keys[sphere]
-	if recipient == "" {
-		return nil, userErr("sphere %q has no age key. Run `artefact key init --sphere %s` first", sphere, sphere)
-	}
 	identity, err := s.Keys.Identity(sphere)
 	if err != nil {
 		return nil, userErr("%v", err)
+	}
+	recipient := s.Cfg.Keys[sphere]
+	if recipient == "" {
+		// A throwaway store may give only the identity, through the environment.
+		if recipient, err = keys.Recipient(identity); err != nil {
+			return nil, userErr("sphere %q has no age key. Run `artefact key init --sphere %s` first", sphere, sphere)
+		}
 	}
 	pr, pw := io.Pipe()
 	kw, keyed := keys.Keyed(keys.DedupKey(identity))

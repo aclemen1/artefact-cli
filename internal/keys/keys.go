@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -23,10 +24,21 @@ type Source interface {
 	Identity(sphere string) (string, error)
 }
 
-// Keychain reads identities from the login keychain.
+// EnvVar names the variable that may hold a sphere's identity instead of
+// the keychain, for tests and throwaway stores: ARTEFACT_AGE_IDENTITY_<SPHERE>,
+// upper-cased, dashes as underscores.
+func EnvVar(sphere string) string {
+	return "ARTEFACT_AGE_IDENTITY_" + strings.ToUpper(strings.ReplaceAll(sphere, "-", "_"))
+}
+
+// Keychain reads identities from $ARTEFACT_AGE_IDENTITY_<SPHERE> when set,
+// otherwise from the login keychain.
 type Keychain struct{}
 
 func (Keychain) Identity(sphere string) (string, error) {
+	if id := strings.TrimSpace(os.Getenv(EnvVar(sphere))); id != "" {
+		return id, nil
+	}
 	out, err := exec.Command("security", "find-generic-password", "-s", service, "-a", account(sphere), "-w").Output()
 	if err != nil {
 		return "", fmt.Errorf("no age key for sphere %q in the keychain (service %s, account %s). Run `artefact key init --sphere %s`", sphere, service, account(sphere), sphere)

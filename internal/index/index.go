@@ -54,6 +54,15 @@ CREATE TABLE IF NOT EXISTS local_files (
   mtime  INTEGER NOT NULL,
   sha256 TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS classes (
+  id         TEXT NOT NULL,
+  plan       TEXT NOT NULL,
+  node       TEXT NOT NULL,
+  by         TEXT NOT NULL,
+  confidence REAL NOT NULL,
+  pending    INTEGER NOT NULL,
+  PRIMARY KEY (id, plan)
+);
 CREATE TABLE IF NOT EXISTS keys (
   key    TEXT PRIMARY KEY,
   id     TEXT NOT NULL,
@@ -119,7 +128,7 @@ func (x *Index) Close() error { return x.db.Close() }
 
 // Reset empties every table, before a rebuild.
 func (x *Index) Reset() error {
-	_, err := x.db.Exec(`DELETE FROM artefacts; DELETE FROM holders; DELETE FROM keys;`)
+	_, err := x.db.Exec(`DELETE FROM artefacts; DELETE FROM holders; DELETE FROM keys; DELETE FROM classes;`)
 	return err
 }
 
@@ -157,7 +166,7 @@ func (x *Index) Delete(id string) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, q := range []string{`DELETE FROM artefacts WHERE id = ?`, `DELETE FROM holders WHERE id = ?`, `DELETE FROM keys WHERE id = ?`} {
+	for _, q := range []string{`DELETE FROM artefacts WHERE id = ?`, `DELETE FROM holders WHERE id = ?`, `DELETE FROM keys WHERE id = ?`, `DELETE FROM classes WHERE id = ?`} {
 		if _, err := tx.Exec(q, id); err != nil {
 			return err
 		}
@@ -232,6 +241,8 @@ func (x *Index) Holders(id string) ([]Holder, error) {
 
 type Filter struct {
 	HeldBy   string // tool, or tool:ref
+	Class    string // plan, or plan:notation (descendants included)
+	Pending  bool   // classified but waiting for a human (in Class's plan when given)
 	Orphaned bool
 	Since    string // deposited on or after this date
 	Limit    int
@@ -252,6 +263,23 @@ func (x *Index) List(f Filter) ([]Row, error) {
 	}
 	if f.Orphaned {
 		where = append(where, `id NOT IN (SELECT id FROM holders)`)
+	}
+	plan, node, _ := strings.Cut(f.Class, ":")
+	switch {
+	case node != "":
+		where = append(where, `id IN (SELECT id FROM classes WHERE plan = ? AND (node = ? OR node LIKE ? ESCAPE '\'))`)
+		args = append(args, plan, node, likePrefix(node+"."))
+	case plan != "":
+		where = append(where, `id IN (SELECT id FROM classes WHERE plan = ?)`)
+		args = append(args, plan)
+	}
+	if f.Pending {
+		if plan != "" {
+			where = append(where, `id IN (SELECT id FROM classes WHERE plan = ? AND pending = 1)`)
+			args = append(args, plan)
+		} else {
+			where = append(where, `id IN (SELECT id FROM classes WHERE pending = 1)`)
+		}
 	}
 	if f.Since != "" {
 		where = append(where, `deposited >= ?`)
@@ -378,4 +406,48 @@ func (x *Index) PutLocalHash(path string, size, mtime int64, sha string) error {
 	_, err := x.db.Exec(`INSERT INTO local_files (path, size, mtime, sha256) VALUES (?,?,?,?)
 		ON CONFLICT(path) DO UPDATE SET size=excluded.size, mtime=excluded.mtime, sha256=excluded.sha256`, path, size, mtime, sha)
 	return err
+}
+
+// ClassRow is the place of an artefact in one plan.
+type ClassRow struct {
+	Plan, Node, By string
+	Confidence     float64
+	Pending        bool
+}
+
+// PutClasses replaces the classes of an artefact.
+func (x *Index) PutClasses(id string, cs []ClassRow) error {
+	tx, err := x.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM classes WHERE id = ?`, id); err != nil {
+		return err
+	}
+	for _, c := range cs {
+		if _, err := tx.Exec(`INSERT INTO classes (id, plan, node, by, confidence, pending) VALUES (?,?,?,?,?,?)`, id, c.Plan, c.Node, c.By, c.Confidence, c.Pending); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// Classified lists the artefacts placed in plan, with their node.
+func (x *Index) Classified(plan string) (map[string]ClassRow, error) {
+	rows, err := x.db.Query(`SELECT id, node, by, confidence, pending FROM classes WHERE plan = ?`, plan)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]ClassRow{}
+	for rows.Next() {
+		var id string
+		c := ClassRow{Plan: plan}
+		if err := rows.Scan(&id, &c.Node, &c.By, &c.Confidence, &c.Pending); err != nil {
+			return nil, err
+		}
+		out[id] = c
+	}
+	return out, rows.Err()
 }

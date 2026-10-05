@@ -53,6 +53,7 @@ type model struct {
 	spheres  []string
 	sphere   string // "" for every sphere
 	orphaned bool
+	pending  bool
 	all      []store.ListItem
 	sel      int
 	top      int
@@ -109,9 +110,9 @@ type (
 )
 
 func (m *model) load() tea.Cmd {
-	sphere, orphaned := m.sphere, m.orphaned
+	sphere, orphaned, pending := m.sphere, m.orphaned, m.pending
 	return func() tea.Msg {
-		items, err := m.st.List(sphere, index.Filter{Orphaned: orphaned})
+		items, err := m.st.List(sphere, index.Filter{Orphaned: orphaned, Pending: pending})
 		return listMsg{items, err}
 	}
 }
@@ -274,6 +275,10 @@ func (m *model) keyList(k tea.KeyPressMsg) tea.Cmd {
 		return m.load()
 	case "O":
 		m.orphaned = !m.orphaned
+		m.sel = 0
+		return m.load()
+	case "P":
+		m.pending = !m.pending
 		m.sel = 0
 		return m.load()
 	case "r":
@@ -535,6 +540,9 @@ func (m *model) header() string {
 	if m.orphaned {
 		extra += sWarn.Render("  orphaned only")
 	}
+	if m.pending {
+		extra += sWarn.Render("  classification pending")
+	}
 	if m.filter != "" {
 		extra += sMuted.Render("  filter: ") + sText.Render(m.filter)
 	}
@@ -606,6 +614,40 @@ func (m *model) renderDetail() string {
 			lines = append(lines, field(k, fmt.Sprint(c.X[k])))
 		}
 	}
+	if len(c.Classes) > 0 {
+		lines = append(lines, "", sBold.Render("Classes"))
+		plans := make([]string, 0, len(c.Classes))
+		for p := range c.Classes {
+			plans = append(plans, p)
+		}
+		slices.Sort(plans)
+		for _, p := range plans {
+			k := c.Classes[p]
+			node := k.Node
+			if node == "" {
+				node = "—"
+			}
+			state := sMuted.Render(fmt.Sprintf("%s, %.2f", k.By, k.Confidence))
+			if k.Pending {
+				state = sWarn.Render("pending") + sMuted.Render(", "+k.By)
+			}
+			lines = append(lines, field(p, node)+"  "+state)
+		}
+	}
+	if len(d.Copies) > 0 {
+		lines = append(lines, "", sBold.Render("Copies"))
+		lines = append(lines, field("local", sOK.Render("complete")))
+		for _, cp := range d.Copies {
+			st := sOK.Render("complete")
+			if !cp.Complete {
+				st = sWarn.Render(fmt.Sprintf("%d file(s) missing", cp.Missing))
+			}
+			if cp.Verified != "" {
+				st += sMuted.Render("  verified " + cp.Verified)
+			}
+			lines = append(lines, field(cp.Backend, st))
+		}
+	}
 	lines = append(lines, "", sBold.Render(fmt.Sprintf("Versions (%d)", len(d.Versions))))
 	for _, v := range d.Versions {
 		lines = append(lines, sMuted.Render(fmt.Sprintf("  %-4s %s  %s  %s", v.Version, v.Created, v.Digest, v.Message)))
@@ -653,7 +695,7 @@ func (m *model) footer() string {
 	case m.mode == modeDetail:
 		help = helpLine("o", "open", "e", "edit card", "S", "seal", "x", "erase", "X", "erase held", "j/k", "scroll", "esc", "back")
 	default:
-		help = helpLine("enter", "detail", "o", "open", "/", "filter", "s", "sphere", "O", "orphaned", "r", "refresh", "q", "quit")
+		help = helpLine("enter", "detail", "o", "open", "/", "filter", "s", "sphere", "O", "orphaned", "P", "pending", "r", "refresh", "q", "quit")
 	}
 	status := ""
 	if m.status != "" {

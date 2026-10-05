@@ -460,47 +460,50 @@ nodes:
 
 ### 9.2 Deciders
 
-A decider answers: to which node of this plan does this artefact belong?
-
-```go
-type Decider interface {
-    Decide(ctx, Question) (Answer, error)
-}
-// Question: the artefact's card, an excerpt of its text rendition,
-//           the candidate nodes (notation, label, scope).
-// Answer:   the chosen node or none, a probability per candidate,
-//           a confidence.
-```
+A decider answers: which child of this node does the artefact belong to?
 
 | Decider | Through | Notes |
 |---|---|---|
-| `openjev` | local HTTP, `/v1/systemone` | default; typed `choice` question; text only |
-| `jev` | TypeSafe API, same request format | hosted; sends content to a third party |
-| `acp` | an ACP agent (herdr-acp, …) | general LLM with structured output; reads images |
-| `rule` | rules in the plan (MIME type, file name, card fields) | deterministic, tried first when present |
+| `rule` | the plan's `rules` (`mime` glob, `filename` and `title` regular expressions) | tried first whatever the decider; the deepest matching node wins |
+| `openjev` | `POST <url>/v1/systemone`, one `choice` question whose `criteria` are the children (label: scope) and `none` | default; `classify.deciders.openjev.url`; with `$JEV_API_KEY`, the same request reaches the hosted Jev |
+| `acp` | one prompt in a new ACP session (`classify.deciders.acp.command`, e.g. `[herdr-acp, --agent, claude]`) | the agent may read the file (read permissions only); it answers one line of JSON |
 
-- Classification walks the plan one level at a time: one question per level,
-  among the children of the chosen node, with a `none` option.
-- Below `classify.threshold` (0.8 by default), the walk stops at the parent
-  node and the artefact is queued for a human (`ls --class-pending`).
-- A human decision (`card <id> --set classes.<plan>.node=…`) always wins and
-  is never overwritten by a decider.
-- A decider never receives a sealed artefact's content, only its card.
-- The probabilities are kept in the `classify` event.
+- What a decider sees (`Facts`): file name, title, type, date, the card's
+  title, date, `dc` and `x`, the first 4,000 bytes of a text payload, and
+  for `acp` the path of the payload. Of a sealed artefact, the card only.
+- The walk asks one question per level, among the children of the node
+  chosen so far. It stops:
+  - at a leaf;
+  - on `none`: the artefact belongs to the current node (pending when no
+    node was chosen yet);
+  - below `classify.threshold` (0.8): the class stays at the current node,
+    marked `pending`, for a human (`artefact ls --pending`).
+- `classify <id> --plan <p> --node <notation>` records a human decision
+  (`by: human:<user>`). A decider never overwrites it.
+- Every decision appends a `classify` event with the steps: level, choice,
+  confidence, and the five best probabilities.
+- `artefact ls --class <plan>[:<notation>]` lists a class and its
+  descendants.
 
-### 9.3 Inputs
+### 9.3 Plans on disk
 
-A decider reads the text rendition (§10). Without one, it reads the card
-only.
+`artefact plan add <file.yaml> [--replace]`, `plan ls`, `plan show`,
+`plan rm`, `plan export` (SKOS in Turtle, with `art:keep` and `art:then`).
+Plans live in `.artefact/plans/<id>.yaml` of the store. A plan's notations
+are unique; `none` is reserved.
 
 ### 9.4 Retention and disposal
 
-- An artefact's retention is its class's rule; with several classes, the
-  longest keep wins.
-- A hold suspends any disposal.
-- `review` lists artefacts whose retention has ended, with the rule that
-  applies. `destroy` is never automatic: it goes through `erase`, with its
-  plan and code.
+- An artefact's retention is its node's rule, or else the nearest
+  ancestor's. `keep` is `10y`, `6m`, `30d` or `forever`, counted from the
+  content's `date` or, with `from: deposit`, from the deposit.
+- With several plans, the longest keep wins; `forever` or `then: keep`
+  makes an artefact never due.
+- A hold (`holds` in the card) marks a due artefact `held`: its disposal is
+  suspended.
+- `artefact review [--plan] [--due-before]` lists what is due, with the
+  rule and the node that carries it. `destroy` is never automatic: it goes
+  through `erase`, with its plan and code.
 
 ## 10. Renditions
 

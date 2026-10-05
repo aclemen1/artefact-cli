@@ -25,6 +25,8 @@ type Config struct {
 	Backends map[string]Backend `yaml:"backends,omitempty"`
 	// Replication sets, per sphere, how many copies an artefact needs.
 	Replication map[string]Replication `yaml:"replication,omitempty"`
+	// Classify sets the deciders that place artefacts in the plans.
+	Classify Classify `yaml:"classify,omitempty"`
 	// RcloneConfig is rclone's configuration file; default ~/.config/artefact/rclone.conf.
 	RcloneConfig string `yaml:"rclone_config,omitempty"`
 
@@ -67,6 +69,30 @@ func (c *Config) ReplicationOf(sphere string) Replication {
 		r.MinCopies = 1
 	}
 	return r
+}
+
+// Classify configures classification (SPEC §9).
+type Classify struct {
+	Decider   string   `yaml:"decider,omitempty" json:"decider,omitempty"`     // rule, openjev or acp; default openjev
+	Threshold float64  `yaml:"threshold,omitempty" json:"threshold,omitempty"` // default 0.8
+	Deciders  Deciders `yaml:"deciders,omitempty" json:"deciders,omitempty"`
+}
+
+type Deciders struct {
+	OpenJev struct {
+		URL   string `yaml:"url,omitempty" json:"url,omitempty"` // default http://127.0.0.1:3000
+		Model string `yaml:"model,omitempty" json:"model,omitempty"`
+	} `yaml:"openjev,omitempty" json:"openjev,omitempty"`
+	ACP struct {
+		Command []string `yaml:"command,omitempty" json:"command,omitempty"` // e.g. [herdr-acp, --agent, claude]
+	} `yaml:"acp,omitempty" json:"acp,omitempty"`
+}
+
+func (c *Config) ClassifyThreshold() float64 {
+	if c.Classify.Threshold > 0 {
+		return c.Classify.Threshold
+	}
+	return 0.8
 }
 
 // Views configures the read-only file views of `artefact serve`.

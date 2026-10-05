@@ -211,6 +211,8 @@ func init() {
 			{Name: "sphere", Kind: spec.String, Help: "List this sphere only. Defaults to every granted sphere."},
 			{Name: "held-by", Kind: spec.String, Help: "Keep the artefacts held by this tool, or by tool:ref."},
 			{Name: "orphaned", Kind: spec.Bool, Help: "Keep the artefacts that no one holds."},
+			{Name: "class", Kind: spec.String, Help: "Keep the artefacts placed in plan, or in plan:notation and below."},
+			{Name: "pending", Kind: spec.Bool, Help: "Keep the artefacts whose classification waits for a human (in --class's plan when given)."},
 			{Name: "since", Kind: spec.String, Help: "Keep the artefacts deposited on or after this date (YYYY-MM-DD)."},
 			{Name: "limit", Kind: spec.String, Default: "100", Help: "Maximum number of artefacts; 0 for all.", Aliases: []string{"n"}},
 		},
@@ -222,7 +224,7 @@ func init() {
 				return nil, spec.UserError("--limit takes a number, got %q. Example: artefact ls --limit 20", ctx.Str("limit"))
 			}
 			return run(ctx, func(s *store.Store) (any, error) {
-				return s.List(ctx.Str("sphere"), index.Filter{HeldBy: ctx.Str("held-by"), Orphaned: ctx.Bool("orphaned"), Since: ctx.Str("since"), Limit: limit})
+				return s.List(ctx.Str("sphere"), index.Filter{HeldBy: ctx.Str("held-by"), Class: ctx.Str("class"), Pending: ctx.Bool("pending"), Orphaned: ctx.Bool("orphaned"), Since: ctx.Str("since"), Limit: limit})
 			})
 		},
 		Text: func(w io.Writer, r any) {

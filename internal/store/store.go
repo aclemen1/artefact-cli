@@ -484,7 +484,18 @@ func (s *Store) saveCard(ref *Ref, c *Card, at string) error {
 	if err != nil {
 		return err
 	}
-	return x.Put(rowOf(c, ref.Row.Path), c.Holders)
+	if err := x.Put(rowOf(c, ref.Row.Path), c.Holders); err != nil {
+		return err
+	}
+	return x.PutClasses(c.ID, classRows(c))
+}
+
+func classRows(c *Card) []index.ClassRow {
+	var out []index.ClassRow
+	for plan, k := range c.Classes {
+		out = append(out, index.ClassRow{Plan: plan, Node: k.Node, By: k.By, Confidence: k.Confidence, Pending: k.Pending})
+	}
+	return out
 }
 
 func rowOf(c *Card, rel string) index.Row {
@@ -859,6 +870,9 @@ func (s *Store) reindex(sphere string) (ReindexResult, error) {
 		}
 		rel, _ := filepath.Rel(root, dir)
 		if err := x.Put(rowOf(c, rel), c.Holders); err != nil {
+			return err
+		}
+		if err := x.PutClasses(c.ID, classRows(c)); err != nil {
 			return err
 		}
 		evs, err := readEvents(dir)

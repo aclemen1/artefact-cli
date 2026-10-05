@@ -19,25 +19,34 @@ import (
 // Card is an artefact's metadata (SPEC §3.2). The core fields are written by
 // artefact; title, date, filename, mime, dc and x by whoever deposits or edits.
 type Card struct {
-	ID        string         `yaml:"id" json:"id"`
-	Sphere    string         `yaml:"sphere" json:"sphere"`
-	Title     string         `yaml:"title" json:"title"`
-	Date      string         `yaml:"date" json:"date"`
-	Mime      string         `yaml:"mime" json:"mime"`
-	Size      int64          `yaml:"size" json:"size"`
-	Filename  string         `yaml:"filename,omitempty" json:"filename,omitempty"`
-	Ext       string         `yaml:"ext,omitempty" json:"ext,omitempty"` // payload extension, fixed at deposit
-	Version   int            `yaml:"version" json:"version"`
-	Digest    string         `yaml:"digest" json:"digest"`
-	Sealed    bool           `yaml:"sealed" json:"sealed"`
-	Keyed     string         `yaml:"keyed,omitempty" json:"-"`
-	Deposited string         `yaml:"deposited" json:"deposited"`
-	Updated   string         `yaml:"updated" json:"updated"`
-	DC        map[string]any `yaml:"dc,omitempty" json:"dc,omitempty"`
-	Classes   map[string]any `yaml:"classes,omitempty" json:"classes,omitempty"`
-	Holders   []index.Holder `yaml:"holders" json:"holders"`
-	Holds     []any          `yaml:"holds,omitempty" json:"holds,omitempty"`
-	X         map[string]any `yaml:"x,omitempty" json:"x,omitempty"`
+	ID        string           `yaml:"id" json:"id"`
+	Sphere    string           `yaml:"sphere" json:"sphere"`
+	Title     string           `yaml:"title" json:"title"`
+	Date      string           `yaml:"date" json:"date"`
+	Mime      string           `yaml:"mime" json:"mime"`
+	Size      int64            `yaml:"size" json:"size"`
+	Filename  string           `yaml:"filename,omitempty" json:"filename,omitempty"`
+	Ext       string           `yaml:"ext,omitempty" json:"ext,omitempty"` // payload extension, fixed at deposit
+	Version   int              `yaml:"version" json:"version"`
+	Digest    string           `yaml:"digest" json:"digest"`
+	Sealed    bool             `yaml:"sealed" json:"sealed"`
+	Keyed     string           `yaml:"keyed,omitempty" json:"-"`
+	Deposited string           `yaml:"deposited" json:"deposited"`
+	Updated   string           `yaml:"updated" json:"updated"`
+	DC        map[string]any   `yaml:"dc,omitempty" json:"dc,omitempty"`
+	Classes   map[string]Class `yaml:"classes,omitempty" json:"classes,omitempty"`
+	Holders   []index.Holder   `yaml:"holders" json:"holders"`
+	Holds     []any            `yaml:"holds,omitempty" json:"holds,omitempty"`
+	X         map[string]any   `yaml:"x,omitempty" json:"x,omitempty"`
+}
+
+// Class is the place of an artefact in one plan.
+type Class struct {
+	Node       string  `yaml:"node" json:"node"` // notation; "" while pending at the top
+	By         string  `yaml:"by" json:"by"`     // decider:<name>, rule:<notation> or human:<who>
+	Confidence float64 `yaml:"confidence" json:"confidence"`
+	Pending    bool    `yaml:"pending,omitempty" json:"pending,omitempty"`
+	At         string  `yaml:"at" json:"at"`
 }
 
 // Event is one line of the object's event log (SPEC §3.3).

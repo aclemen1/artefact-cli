@@ -439,6 +439,12 @@ func (h *Server) renderLoop(ctx context.Context) {
 			if _, err := st.RenderMissing(sp, 50, time.Now().Add(4*time.Minute)); err != nil {
 				fmt.Fprintf(os.Stderr, "artefact serve: render %s: %v\n", sp, err)
 			}
+			// New, changed and dropped texts reach the index by meaning.
+			if st.SemanticReady(sp) {
+				if _, err := st.RefreshSemantic(ctx, sp); err != nil {
+					fmt.Fprintf(os.Stderr, "artefact serve: index by meaning %s: %v\n", sp, err)
+				}
+			}
 		}
 	}
 }

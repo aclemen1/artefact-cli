@@ -87,53 +87,17 @@ func (s *Store) indexSearch(x *index.Index, objDir string, c *Card) error {
 type SearchHit struct {
 	ListItem
 	Snippet string  `json:"snippet"`
-	Score   float64 `json:"score"`
+	Score   float64 `json:"score"`         // lower is better
+	Via     string  `json:"via,omitempty"` // words, meaning, words+meaning, or filter
 }
 
-// Search finds artefacts of the granted spheres by words of their title,
-// file name, card or text content.
+// Search is Find, for the callers that need the hits only.
 func (s *Store) Search(q, sphere string, limit int, state string, order Sort) ([]SearchHit, error) {
-	if strings.TrimSpace(q) == "" {
-		return nil, userErr("search needs words. Example: artefact search décompte assura")
+	r, err := s.Find(q, FindOptions{Sphere: sphere, Limit: limit, State: state, Sort: order})
+	if err != nil {
+		return nil, err
 	}
-	spheres := s.Spheres
-	if sphere != "" {
-		sp, err := s.sphereOrDefault(sphere)
-		if err != nil {
-			return nil, err
-		}
-		spheres = []string{sp}
-	}
-	if limit <= 0 {
-		limit = 20
-	}
-	out := []SearchHit{}
-	for _, sp := range spheres {
-		x, err := s.index(sp)
-		if err != nil {
-			return nil, err
-		}
-		// Another order than relevance needs every match before the cut.
-		hits, err := x.Search(q, max(limit*2, 1000))
-		if err != nil {
-			return nil, err
-		}
-		for _, h := range hits {
-			row, err := x.Get(h.ID)
-			if err != nil {
-				continue
-			}
-			if (state == "active" && row.Archived != "") || (state == "archived" && row.Archived == "") {
-				continue
-			}
-			out = append(out, SearchHit{ListItem: ListItem{Row: row, Sphere: sp, URI: URI(sp, row.ID)}, Snippet: h.Snippet, Score: h.Score})
-		}
-	}
-	sortHits(out, order.orDefault("relevance"))
-	if len(out) > limit {
-		out = out[:limit]
-	}
-	return out, nil
+	return r.Hits, nil
 }
 
 // RebuildSearch fills the search index from the store without touching the

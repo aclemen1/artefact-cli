@@ -129,6 +129,10 @@ func Open(path string) (*Index, error) {
 		db.Close()
 		return nil, fmt.Errorf("index %s: full-text search: %w", path, err)
 	}
+	if _, err := db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS search_vocab USING fts5vocab(search, row)`); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS artefacts_keyed ON artefacts(keyed)`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("index %s: %w", path, err)
@@ -537,12 +541,16 @@ type Hit struct {
 // Search finds artefacts whose words start with every word of q, accents
 // and case ignored; title and file name weigh more than the content.
 func (x *Index) Search(q string, limit int) ([]Hit, error) {
-	match := ftsQuery(q)
+	return x.Match(ftsQuery(q), limit)
+}
+
+// Match runs an FTS5 expression; limit 0 returns every match.
+func (x *Index) Match(match string, limit int) ([]Hit, error) {
 	if match == "" {
 		return []Hit{}, nil
 	}
 	if limit <= 0 {
-		limit = 20
+		limit = -1
 	}
 	rows, err := x.db.Query(`SELECT id, bm25(search, 0, 10, 5, 2, 1) AS score,
 		snippet(search, -1, '«', '»', '…', 12) FROM search WHERE search MATCH ? ORDER BY score LIMIT ?`, match, limit)
@@ -609,6 +617,160 @@ func (x *Index) Tags() (map[string]int, error) {
 			return nil, err
 		}
 		out[t] = n
+	}
+	return out, rows.Err()
+}
+
+// Vocabulary returns the indexed words that start with prefix and how many
+// artefacts hold each: the candidates to correct a mistyped word.
+func (x *Index) Vocabulary(prefix string) (map[string]int, error) {
+	rows, err := x.db.Query(`SELECT term, doc FROM search_vocab WHERE term >= ? AND term < ?`, prefix, prefix+"\U0010FFFF")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var t string
+		var n int
+		if err := rows.Scan(&t, &n); err != nil {
+			return nil, err
+		}
+		out[t] = n
+	}
+	return out, rows.Err()
+}
+
+// Narrow is what a search keeps besides its words.
+type Narrow struct {
+	Types   []string // pdf, image, text, audio, video, an extension or a media type
+	Classes []string // notation (any plan) or plan:notation, sub-classes included
+	Plans   []string
+	Tags    []string
+	NotTags []string
+	After   string
+	Before  string
+	Is      []string
+	IsNot   []string
+}
+
+var mediaFamilies = map[string]string{"image": "image/", "audio": "audio/", "video": "video/", "text": "text/"}
+
+func (n Narrow) where() (string, []any) {
+	var where []string
+	var args []any
+	if len(n.Types) > 0 {
+		var or []string
+		for _, t := range n.Types {
+			switch {
+			case t == "pdf":
+				or = append(or, `mime = 'application/pdf'`)
+			case mediaFamilies[t] != "":
+				or = append(or, `mime LIKE ?`)
+				args = append(args, mediaFamilies[t]+"%")
+			case strings.Contains(t, "/"):
+				or = append(or, `mime = ?`)
+				args = append(args, t)
+			default:
+				or = append(or, `lower(ext) = ?`)
+				args = append(args, "."+t)
+			}
+		}
+		where = append(where, "("+strings.Join(or, " OR ")+")")
+	}
+	if len(n.Classes) > 0 {
+		var or []string
+		for _, c := range n.Classes {
+			plan, node, hasPlan := strings.Cut(c, ":")
+			if !hasPlan {
+				node, plan = c, ""
+			}
+			q := `id IN (SELECT id FROM classes WHERE (node = ? OR node LIKE ? ESCAPE '\')`
+			a := []any{node, likePrefix(node + ".")}
+			if plan != "" {
+				q += ` AND plan = ?`
+				a = append(a, plan)
+			}
+			or = append(or, q+`)`)
+			args = append(args, a...)
+		}
+		where = append(where, "("+strings.Join(or, " OR ")+")")
+	}
+	for _, p := range n.Plans {
+		where = append(where, `id IN (SELECT id FROM classes WHERE plan = ? AND node != '')`)
+		args = append(args, p)
+	}
+	for _, t := range n.Tags {
+		where = append(where, `id IN (SELECT id FROM tags WHERE tag = ?)`)
+		args = append(args, t)
+	}
+	for _, t := range n.NotTags {
+		where = append(where, `id NOT IN (SELECT id FROM tags WHERE tag = ?)`)
+		args = append(args, t)
+	}
+	if n.After != "" {
+		where = append(where, `date >= ?`)
+		args = append(args, n.After)
+	}
+	if n.Before != "" {
+		where = append(where, `date != '' AND date < ?`)
+		args = append(args, n.Before)
+	}
+	state := map[string]string{
+		"sealed":       `sealed = 1`,
+		"archived":     `archived != ''`,
+		"active":       `archived = ''`,
+		"pending":      `id IN (SELECT id FROM classes WHERE pending = 1)`,
+		"orphaned":     `id NOT IN (SELECT id FROM holders)`,
+		"classified":   `id IN (SELECT id FROM classes WHERE node != '')`,
+		"unclassified": `id NOT IN (SELECT id FROM classes WHERE node != '')`,
+	}
+	for _, s := range n.Is {
+		where = append(where, state[s])
+	}
+	for _, s := range n.IsNot {
+		where = append(where, `NOT (`+state[s]+`)`)
+	}
+	return strings.Join(where, " AND "), args
+}
+
+// Narrowed returns the rows that pass n, by id.
+func (x *Index) Narrowed(n Narrow) (map[string]Row, error) {
+	w, args := n.where()
+	q := `SELECT ` + cols + ` FROM artefacts`
+	if w != "" {
+		q += ` WHERE ` + w
+	}
+	rows, err := x.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]Row{}
+	for rows.Next() {
+		r, err := scan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[r.ID] = r
+	}
+	return out, rows.Err()
+}
+
+// Paths maps each object's path to its id.
+func (x *Index) Paths() (map[string]string, error) {
+	rows, err := x.db.Query(`SELECT path, id FROM artefacts`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var p, id string
+		if err := rows.Scan(&p, &id); err != nil {
+			return nil, err
+		}
+		out[p] = id
 	}
 	return out, rows.Err()
 }

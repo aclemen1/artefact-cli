@@ -10,7 +10,7 @@ description: Keeps files (PDFs, images, documents, media) as artefacts with a st
 | Store a file | `artefact put <file>` · `… \| artefact put - --filename <name>` |
 | Read a file | `artefact get <id> --out <path>` |
 | Read a file's text | `artefact get <id> --rendition text` (make it: `artefact render <id>`) |
-| Search the texts | `artefact search "<words>"` |
+| Search | `artefact search <words> ["phrase"] [-word] [type:pdf] [class:<label>] [after:2024] [is:pending]` (grammar: `artefact schema artefacts search`) |
 | Describe artefacts | `artefact stat <id>...` |
 | List artefacts | `artefact ls` |
 | Edit the card | `artefact card <id> --set title="…"` |

@@ -3,6 +3,7 @@ package actions
 
 import (
 	"bufio"
+	"context"
 	_ "embed"
 	"errors"
 	"fmt"
@@ -512,11 +513,30 @@ func init() {
 		Params: []spec.Param{
 			{Name: "sphere", Kind: spec.String, Help: "Rebuild this sphere only."},
 			{Name: "search-only", Kind: spec.Bool, Help: "Rebuild only the full-text search index; the store stays usable meanwhile."},
+			{Name: "semantic", Kind: spec.Bool, Help: "Build or refresh the index by meaning (qmd, one index artefact-<sphere> over the text renditions); the first run computes every vector."},
 		},
-		Examples: []string{"artefact reindex", "artefact reindex --sphere perso", "artefact reindex --search-only"},
+		Examples: []string{"artefact reindex", "artefact reindex --sphere perso", "artefact reindex --search-only", "artefact reindex --semantic"},
 		Effects:  []string{"Replaces the content of the sphere's index; the store is not changed."},
 		Run: func(ctx *spec.Context) (any, error) {
 			return run(ctx, func(s *store.Store) (any, error) {
+				if ctx.Bool("semantic") {
+					if !s.SemanticEnabled() {
+						return nil, spec.UserError("search by meaning needs qmd (https://github.com/tobi/qmd) and search.semantic not set to none")
+					}
+					spheres := s.Spheres
+					if sp := ctx.Str("sphere"); sp != "" {
+						spheres = []string{sp}
+					}
+					var out []*store.SemanticResult
+					for _, sp := range spheres {
+						r, err := s.RefreshSemantic(context.Background(), sp)
+						if err != nil {
+							return nil, err
+						}
+						out = append(out, r)
+					}
+					return out, nil
+				}
 				if ctx.Bool("search-only") {
 					return s.RebuildSearch(ctx.Str("sphere"))
 				}
@@ -650,16 +670,31 @@ func stateFilter(s string) string {
 func init() {
 	spec.Register(&spec.Action{
 		Category: "artefacts", Name: "search", Right: "read",
-		Summary:    "Find artefacts by words of their title, file name, card or text content.",
-		Discussion: "Every word must match the start of a word, accents and case ignored; title and file name weigh more than the content. The content searched is the text of a text payload, or the text rendition of other files once it exists. A sealed artefact is found by its card only.",
+		Summary: "Find artefacts with a Google-like grammar: words, \"phrases\", -exclusions, OR, fields and filters; ranked by words and by meaning.",
+		Discussion: `Words match the start of words, accents and case ignored; title and file name weigh more than the content, searched in the text of a text payload or of its text rendition. When the sphere has an index by meaning (reindex --semantic), texts close in meaning rank too, even without the words; each hit says via words, meaning or both. A plain word that matches nothing is corrected to the closest indexed word (corrected says so).
+
+Grammar:
+  "bail à loyer"        these words, whole, in this order (strict)
+  -brouillon            without this word; -"two words" for a phrase
+  assura OR css         either word (strict)
+  loyer AROUND(5) garantie   both words within 5 words (strict)
+  title:  file:  text:  card:   the word in this field only (strict); title:"a phrase"
+  type:pdf  type:image  type:text  type:audio  type:video  type:docx  type:image/png
+  class:4.2  class:perso:4.2  class:banque   in this class or below; a label word finds its classes
+  plan:perso  tag:eve  -tag:eve
+  after:2024-03  before:2025  year:2023  date:2026-10   by the content's date
+  is:sealed  is:archived  is:active  is:pending  is:orphaned  is:classified  is:unclassified  (-is: negates)
+  sphere:perso
+Filters alone list what passes them, newest deposit first. A sealed artefact is found by its card only, never by meaning.`,
 		Params: []spec.Param{
-			{Name: "query", Kind: spec.StringList, Positional: true, Required: true, Help: "Words to find."},
+			{Name: "query", Kind: spec.StringList, Positional: true, Required: true, Help: "Words, phrases and operators (see the grammar)."},
 			{Name: "sphere", Kind: spec.String, Help: "Search this sphere only. Defaults to every granted sphere."},
 			{Name: "limit", Kind: spec.String, Default: "20", Help: "Maximum number of results.", Aliases: []string{"n"}},
-			{Name: "state", Kind: spec.String, Default: "all", Enum: []string{"active", "archived", "all"}, Help: "Which artefacts to search: active, archived or all."},
+			{Name: "state", Kind: spec.String, Default: "all", Enum: []string{"active", "archived", "all"}, Help: "Which artefacts to search: active, archived or all; is: in the query wins."},
 			{Name: "sort", Kind: spec.String, Help: "Order: relevance (default), date, deposited, updated, title or size, with :asc or :desc. The limit applies after the sort."},
+			{Name: "meaning", Kind: spec.String, Default: "auto", Enum: []string{"auto", "on", "off"}, Help: "Rank by meaning too: auto when the sphere has its index, on to say when it has none, off for words only."},
 		},
-		Examples: []string{"artefact search décompte assura", "artefact search ordonnance rochat --sphere perso", "artefact search bail --state archived", "artefact search facture assura --sort date"},
+		Examples: []string{"artefact search décompte assura", "artefact search litige avec la régie", `artefact search "bail à loyer" -brouillon type:pdf after:2020`, "artefact search assura OR css class:santé year:2025", "artefact search is:pending type:image --sort date"},
 		Effects:  []string{"Reads only."},
 		Run: func(ctx *spec.Context) (any, error) {
 			limit, err := strconv.Atoi(ctx.Str("limit"))
@@ -670,13 +705,29 @@ func init() {
 			if err != nil {
 				return nil, wrap(err)
 			}
+			var semantic *bool
+			switch ctx.Str("meaning") {
+			case "on":
+				t := true
+				semantic = &t
+			case "off":
+				f := false
+				semantic = &f
+			}
 			return run(ctx, func(s *store.Store) (any, error) {
-				return s.Search(strings.Join(ctx.List("query"), " "), ctx.Str("sphere"), limit, ctx.Str("state"), order)
+				return s.Find(strings.Join(ctx.List("query"), " "), store.FindOptions{Sphere: ctx.Str("sphere"), Limit: limit, State: ctx.Str("state"), Sort: order, Semantic: semantic})
 			})
 		},
 		Text: func(w io.Writer, r any) {
-			for _, h := range r.([]store.SearchHit) {
-				fmt.Fprintf(w, "%s  %-6s %s  %s\n    %s\n", h.ID, h.Sphere, h.Date, h.Title, strings.ReplaceAll(h.Snippet, "\n", " "))
+			res := r.(*store.FindResult)
+			if res.Corrected != "" {
+				fmt.Fprintf(w, "searched for: %s\n", res.Corrected)
+			}
+			for _, n := range res.Notes {
+				fmt.Fprintf(w, "note: %s\n", n)
+			}
+			for _, h := range res.Hits {
+				fmt.Fprintf(w, "%s  %-6s %s  %-13s %s\n    %s\n", h.ID, h.Sphere, h.Date, h.Via, h.Title, strings.ReplaceAll(h.Snippet, "\n", " "))
 			}
 		},
 	})

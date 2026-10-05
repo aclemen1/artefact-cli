@@ -32,6 +32,12 @@ type Config struct {
 		Command []string `yaml:"command,omitempty" json:"command,omitempty"` // default [lector]
 		Auto    *bool    `yaml:"auto,omitempty" json:"auto,omitempty"`       // serve renders new versions; default true
 	} `yaml:"lector,omitempty"`
+	// Search tunes the search (SPEC §5).
+	Search struct {
+		// Semantic ranks by meaning too: "qmd" (default when the qmd command is found) or "none".
+		Semantic string   `yaml:"semantic,omitempty" json:"semantic,omitempty"`
+		Qmd      []string `yaml:"qmd,omitempty" json:"qmd,omitempty"` // default [qmd]
+	} `yaml:"search,omitempty"`
 	// RcloneConfig is rclone's configuration file; default ~/.config/artefact/rclone.conf.
 	RcloneConfig string `yaml:"rclone_config,omitempty"`
 

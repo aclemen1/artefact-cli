@@ -227,12 +227,46 @@ backend (local disk by default).
 | `get <id> [--version vN] [--reveal] [--out <path>] [--rendition text]` | writes the payload or the text rendition |
 | `stat <id>...` | card, versions, holders, renditions, locations and their last fixity check; one or many ids |
 | `which <file\|->  [--sphere]` | without writing anything, the artefact that holds exactly this content: by SHA-256 among clear artefacts, by the sphere's keyed digest among sealed ones; `found: false` otherwise |
-| `search <words> [--sphere] [--state] [--sort <key>[:asc\|desc]]` | full-text search of titles, file names, cards and text contents (FTS5, accents ignored); a sealed artefact by its card only; sorted by relevance unless `--sort` |
+| `search <query> [--sphere] [--state] [--sort <key>[:asc\|desc]] [--meaning auto\|on\|off]` | search with a Google-like grammar, ranked by words and by meaning (§5.1); returns `{query, corrected, semantic, notes, hits[{…, snippet, via}]}` |
 | `revise <id> --from <file>` | saves new content as the next version; earlier versions are kept; a sealed artefact stays sealed |
 | `meta read\|write <id>...` | read: the file's own metadata (EXIF, XMP, PDF, Office, through exiftool) into the card's `embedded` block, and the content's date when the card still has the deposit date; write: the card's title, date, creator, description and tags into the file as XMP, as a new version. A sealed artefact's own metadata never enters its card |
 | `card <id> --tag <t> --untag <t>`, `tags`, `ls --tag <t>` | keywords: in the card, searchable and filterable |
 | `archive <id>...`, `unarchive <id>...` | the archived state: kept, replicated, reachable by id and view path, hidden from lists |
 | `ls [--sphere] [--class <plan>:<node>] [--held-by <tool>[:<ref>]] [--orphaned] [--sealed] [--since] [--sort <key>[:asc\|desc]]` | lists artefacts, newest deposit first unless `--sort` |
+
+### 5.1 Search
+
+The grammar follows Google's. Plain words match the start of words, accents
+and case ignored; the title and the file name weigh more than the card and
+the text (of a text payload, or of its text rendition).
+
+| Form | Matches |
+|---|---|
+| `"bail à loyer"` | these words, whole, in this order |
+| `-brouillon`, `-"two words"` | excludes |
+| `assura OR css` | either |
+| `loyer AROUND(5) garantie` | both within 5 words |
+| `title:` `file:` `text:` `card:` | the word or `"phrase"` in this field |
+| `type:pdf\|image\|text\|audio\|video\|<ext>\|<media type>` | the kind of file |
+| `class:4.2`, `class:perso:4.2`, `class:banque` | in the class or below; a word of a label finds its classes |
+| `plan:` `tag:` `-tag:` `sphere:` | plan, tag, sphere |
+| `after:` `before:` `year:` `date:` | the content's date: `YYYY`, `YYYY-MM` or `YYYY-MM-DD` |
+| `is:` / `-is:` `sealed archived active pending orphaned classified unclassified` | state |
+
+- Two rankings merge by reciprocal rank fusion: the words (bm25), and the
+  meaning when the sphere has an index by meaning. Each hit says `via`:
+  `words`, `meaning` or `words+meaning`.
+- Phrases, fields, `OR`, `AROUND`, exclusions and filters are strict: a text
+  found by meaning must satisfy them. Plain words rank without excluding.
+- A plain word of 5 letters or more that matches nothing is replaced by the
+  closest indexed word (edit distance 1, or 2 from 8 letters); `corrected`
+  shows the query searched.
+- Filters alone list what passes them, newest deposit first.
+- The index by meaning is qmd's: one index `artefact-<sphere>`
+  (`~/.config/qmd/artefact-<sphere>.yml`) over the text renditions,
+  built by `reindex --semantic`, kept up to date by `serve` after each
+  render pass. A sealed artefact has no rendition, so meaning never finds it.
+  `search.semantic: none` turns it off; `search.qmd` overrides the command.
 
 Sort keys: `relevance` (search only), `date` (of the content), `deposited`,
 `updated`, `title`, `size`. Without a direction, dates, sizes and relevance

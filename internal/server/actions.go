@@ -127,7 +127,7 @@ func init() {
 		Params: []spec.Param{
 			{Name: "verb", Kind: spec.String, Positional: true, Required: true, Enum: []string{"create", "list", "revoke"}, Help: "create, list or revoke"},
 			{Name: "name", Kind: spec.String, Help: "Name of the client, for create and revoke."},
-			{Name: "spheres", Kind: spec.String, Help: "Comma-separated spheres granted, for create. Defaults to the default sphere."},
+			{Name: "spheres", Kind: spec.String, Help: "Comma-separated spheres granted, for create; required."},
 			{Name: "rights", Kind: spec.String, Default: "read", Help: "Comma-separated rights, for create."},
 		},
 		Examples: []string{"artefact token create --name mnemo --spheres perso,pro --rights read,write,reveal,erase", "artefact token list", "artefact token revoke --name mnemo"},
@@ -153,7 +153,7 @@ func init() {
 			}
 			list := ctx.Str("spheres")
 			if list == "" {
-				list = cfg.DefaultSphere
+				return nil, spec.UserError("token create needs --spheres: there is no default sphere. Example: artefact token create %s --spheres perso,pro --rights read", ctx.Str("name"))
 			}
 			spheres, err := splitSpheres(cfg, list)
 			if err != nil {
@@ -175,7 +175,8 @@ func init() {
 		Discussion: "The view shows a/<id><ext> (current version) and a/<id>/v<N><ext> for every unsealed artefact; the extension is fixed at deposit. Sealed artefacts never appear. serve also mounts the directories of views.mounts itself, and unmounts them when it stops.",
 		Params: []spec.Param{
 			{Name: "dir", Kind: spec.String, Positional: true, Required: true, Help: "Directory to mount on; created when absent."},
-			{Name: "sphere", Kind: spec.String, Help: "Sphere of the view. Defaults to the default sphere."},
+			{Name: "sphere", Kind: spec.String, Required: true, Help: "Sphere of the view; there is no default.",
+				Missing: "mount needs --sphere: there is no default sphere. Example: artefact mount ~/mnemo/pro/_artefacts --sphere pro"},
 		},
 		Examples: []string{"artefact mount ~/mnemo/perso/_artefacts --sphere perso"},
 		Effects:  []string{"Mounts the view (read-only, soft) on the directory, as the current user."},
@@ -185,9 +186,6 @@ func init() {
 				return nil, err
 			}
 			sp := ctx.Str("sphere")
-			if sp == "" {
-				sp = cfg.DefaultSphere
-			}
 			if err := Mount(cfg, sp, ctx.Str("dir")); err != nil {
 				return nil, spec.UserError("%v", err)
 			}

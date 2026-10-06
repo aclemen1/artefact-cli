@@ -22,10 +22,10 @@ func findTitles(t *testing.T, s *Store, q string, o FindOptions) ([]string, *Fin
 
 func TestFindGrammar(t *testing.T) {
 	s := newStore(t)
-	put(t, s, "Bail à loyer signé, garantie de loyer trois mois", PutOptions{Filename: "bail.txt", Title: "Bail", Date: "2023-02-06"})
-	put(t, s, "Brouillon du bail à loyer", PutOptions{Filename: "brouillon.txt", Title: "Brouillon bail", Date: "2023-01-10"})
-	put(t, s, "Décompte de prestations Assura", PutOptions{Filename: "assura.txt", Title: "Décompte Assura", Date: "2025-04-01"})
-	c := put(t, s, "Décompte CSS assurance", PutOptions{Filename: "css.txt", Title: "Décompte CSS", Date: "2021-06-01"})
+	put(t, s, "Bail à loyer signé, garantie de loyer trois mois", PutOptions{Sphere: "perso", Filename: "bail.txt", Title: "Bail", Date: "2023-02-06"})
+	put(t, s, "Brouillon du bail à loyer", PutOptions{Sphere: "perso", Filename: "brouillon.txt", Title: "Brouillon bail", Date: "2023-01-10"})
+	put(t, s, "Décompte de prestations Assura", PutOptions{Sphere: "perso", Filename: "assura.txt", Title: "Décompte Assura", Date: "2025-04-01"})
+	c := put(t, s, "Décompte CSS assurance", PutOptions{Sphere: "perso", Filename: "css.txt", Title: "Décompte CSS", Date: "2021-06-01"})
 	s.Tag(c.URI, []string{"eve"}, nil)
 	off := false
 	o := FindOptions{Semantic: &off}
@@ -76,9 +76,9 @@ func TestFindByMeaning(t *testing.T) {
 	s := newStore(t)
 	fakeLector(t, s)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	near := put(t, s, "jugement du tribunal sur la consignation", PutOptions{Filename: "jugement.pdf", Mime: "application/pdf", Title: "Jugement"})
-	put(t, s, "litige régie", PutOptions{Filename: "note.txt", Title: "Note litige régie"})
-	far := put(t, s, "recette de cuisine", PutOptions{Filename: "recette.pdf", Mime: "application/pdf", Title: "Recette"})
+	near := put(t, s, "jugement du tribunal sur la consignation", PutOptions{Sphere: "perso", Filename: "jugement.pdf", Mime: "application/pdf", Title: "Jugement"})
+	put(t, s, "litige régie", PutOptions{Sphere: "perso", Filename: "note.txt", Title: "Note litige régie"})
+	far := put(t, s, "recette de cuisine", PutOptions{Sphere: "perso", Filename: "recette.pdf", Mime: "application/pdf", Title: "Recette"})
 	for _, r := range []*PutResult{near, far} {
 		if _, err := s.Render(r.URI, false); err != nil {
 			t.Fatal(err)

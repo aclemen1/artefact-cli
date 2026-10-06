@@ -86,7 +86,7 @@ func TestClassifyWalk(t *testing.T) {
 	s := withPlan(t, jev.URL)
 	ctx := context.Background()
 
-	ins := put(t, s, "Assura: statements of health insurance claims for 2026", PutOptions{Filename: "decompte.txt", Title: "Décompte Assura", Date: "2020-03-01"})
+	ins := put(t, s, "Assura: statements of health insurance claims for 2026", PutOptions{Sphere: "perso", Filename: "decompte.txt", Title: "Décompte Assura", Date: "2020-03-01"})
 	r, err := s.Classify(ctx, ins.ID, "household", "")
 	if err != nil {
 		t.Fatal(err)
@@ -94,11 +94,11 @@ func TestClassifyWalk(t *testing.T) {
 	if r.Status != "classified" || r.Node != "3.2" || r.By != "decider:openjev" || len(r.Steps) != 2 {
 		t.Fatalf("walk: %+v", r)
 	}
-	rent := put(t, s, "x", PutOptions{Filename: "loyer-octobre.pdf"})
+	rent := put(t, s, "x", PutOptions{Sphere: "perso", Filename: "loyer-octobre.pdf"})
 	if r, _ := s.Classify(ctx, rent.ID, "household", ""); r.Node != "4" || r.By != "rule:4" {
 		t.Errorf("rule: %+v", r)
 	}
-	other := put(t, s, "nothing related", PutOptions{Filename: "note.txt"})
+	other := put(t, s, "nothing related", PutOptions{Sphere: "perso", Filename: "note.txt"})
 	if r, _ := s.Classify(ctx, other.ID, "household", ""); r.Status != "pending" || r.Node != "" {
 		t.Errorf("none at the top must be pending: %+v", r)
 	}
@@ -141,7 +141,7 @@ func TestClassifyLowConfidenceIsPending(t *testing.T) {
 	jev := fakeJev(t, 0.5)
 	defer jev.Close()
 	s := withPlan(t, jev.URL)
-	a := put(t, s, "health insurance claims", PutOptions{Filename: "a.txt"})
+	a := put(t, s, "health insurance claims", PutOptions{Sphere: "perso", Filename: "a.txt"})
 	r, err := s.Classify(context.Background(), a.ID, "household", "")
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +163,7 @@ func TestSealedArtefactGivesItsCardOnly(t *testing.T) {
 	s := sealedStore(t)
 	s.Plans().Save([]byte(planYAML), false)
 	s.Cfg.Classify.Deciders.OpenJev.URL = srv.URL
-	a := put(t, s, "TOPSECRET health insurance", PutOptions{Filename: "s.txt", Title: "Carte", Seal: true})
+	a := put(t, s, "TOPSECRET health insurance", PutOptions{Sphere: "perso", Filename: "s.txt", Title: "Carte", Seal: true})
 	if _, err := s.Classify(context.Background(), a.ID, "household", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -174,8 +174,8 @@ func TestSealedArtefactGivesItsCardOnly(t *testing.T) {
 
 func TestReview(t *testing.T) {
 	s := withPlan(t, "http://127.0.0.1:1")
-	old := put(t, s, "a", PutOptions{Filename: "a.txt", Date: "2015-01-10"})
-	recent := put(t, s, "b", PutOptions{Filename: "b.txt", Date: time.Now().Format("2006-01-02")})
+	old := put(t, s, "a", PutOptions{Sphere: "perso", Filename: "a.txt", Date: "2015-01-10"})
+	recent := put(t, s, "b", PutOptions{Sphere: "perso", Filename: "b.txt", Date: time.Now().Format("2006-01-02")})
 	s.SetClass(old.ID, "household", "3.2", "alain")
 	s.SetClass(recent.ID, "household", "3.2", "alain")
 	due, err := s.Review("", time.Now())
@@ -207,8 +207,8 @@ func TestArchive(t *testing.T) {
 	if _, err := s.Plans().Save([]byte(plan), false); err != nil {
 		t.Fatal(err)
 	}
-	old := put(t, s, "old claim", PutOptions{Filename: "a.txt", Date: "2015-01-10"})
-	put(t, s, "current", PutOptions{Filename: "b.txt"})
+	old := put(t, s, "old claim", PutOptions{Sphere: "perso", Filename: "a.txt", Date: "2015-01-10"})
+	put(t, s, "current", PutOptions{Sphere: "perso", Filename: "b.txt"})
 	s.SetClass(old.ID, "household", "3.2", "alain")
 	due, _ := s.Review("", time.Now())
 	if len(due) != 1 || due[0].Then != "archive" {
@@ -240,9 +240,9 @@ func TestArchive(t *testing.T) {
 
 func TestSearch(t *testing.T) {
 	s := sealedStore(t)
-	a := put(t, s, "Assura SA. Décompte de prestations, franchise 300 CHF, quote-part 10 %.", PutOptions{Filename: "decompte-assura.txt", Title: "Décompte Assura septembre"})
+	a := put(t, s, "Assura SA. Décompte de prestations, franchise 300 CHF, quote-part 10 %.", PutOptions{Sphere: "perso", Filename: "decompte-assura.txt", Title: "Décompte Assura septembre"})
 	put(t, s, "Ordonnance du Dr Rochat: Plaquenil 200 mg", PutOptions{Filename: "ordonnance.txt", Sphere: "pro"})
-	sealed := put(t, s, "SECRETWORD inside", PutOptions{Filename: "codes.txt", Title: "Codes de secours", Seal: true})
+	sealed := put(t, s, "SECRETWORD inside", PutOptions{Sphere: "perso", Filename: "codes.txt", Title: "Codes de secours", Seal: true})
 	s.EditCard(a.ID, []string{"dc.creator=Assura SA"}, "")
 
 	hits, err := s.Search("decompte", "", 10, "all", Sort{})
@@ -278,8 +278,8 @@ func TestSearch(t *testing.T) {
 
 func TestWhich(t *testing.T) {
 	s := sealedStore(t)
-	clear := put(t, s, "facture électricité", PutOptions{Filename: "f.pdf", Holds: []index.Holder{{By: "mnemo", Ref: "C1"}}})
-	sealed := put(t, s, "codes 2FA", PutOptions{Filename: "c.txt", Seal: true})
+	clear := put(t, s, "facture électricité", PutOptions{Sphere: "perso", Filename: "f.pdf", Holds: []index.Holder{{By: "mnemo", Ref: "C1"}}})
+	sealed := put(t, s, "codes 2FA", PutOptions{Sphere: "perso", Filename: "c.txt", Seal: true})
 	r, err := s.Which(strings.NewReader("facture électricité"), "")
 	if err != nil || !r.Found || r.ID != clear.ID || len(r.Holders) != 1 || r.Holders[0].By != "mnemo" {
 		t.Fatalf("clear: %+v %v", r, err)

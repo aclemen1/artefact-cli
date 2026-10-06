@@ -29,6 +29,8 @@ type Param struct {
 	Help       string    `json:"description"`
 	// Hidden aliases absorbed on input, never shown in help or schema.
 	Aliases []string `json:"-"`
+	// Missing replaces the generic error when a required parameter is absent.
+	Missing string `json:"-"`
 }
 
 type Action struct {
@@ -246,6 +248,9 @@ func Parse(a *Action, argv []string) (map[string]any, error) {
 			continue
 		}
 		if p.Required {
+			if p.Missing != "" {
+				return nil, UserError("%s", p.Missing)
+			}
 			return nil, UserError("missing %s for `artefact %s`. Example: %s", describeParam(p), a.Name, firstExample(a))
 		}
 		if p.Default != "" {
@@ -417,6 +422,9 @@ func ArgsFrom(a *Action, in map[string]any) (map[string]any, error) {
 			continue
 		}
 		if p.Required {
+			if p.Missing != "" {
+				return nil, UserError("%s", p.Missing)
+			}
 			return nil, UserError("missing %s for %s. Example: %s", p.Name, a.Name, firstExample(a))
 		}
 		if p.Default != "" {

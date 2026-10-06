@@ -27,7 +27,7 @@ printf '{"ok":true,"result":{"markdown":"%s","methods":{"1":"text"},"confidence"
 func TestRenderFeedsSearchAndGoesAwayOnSeal(t *testing.T) {
 	s := sealedStore(t)
 	calls := fakeLector(t, s)
-	r := put(t, s, "quittance loyer octobre", PutOptions{Filename: "scan.pdf", Mime: "application/pdf"})
+	r := put(t, s, "quittance loyer octobre", PutOptions{Sphere: "perso", Filename: "scan.pdf", Mime: "application/pdf"})
 
 	res, err := s.Render(r.URI, false)
 	if err != nil || res.Status != "rendered" || res.Rendition.Chars == 0 {
@@ -74,7 +74,7 @@ func TestRenderFeedsSearchAndGoesAwayOnSeal(t *testing.T) {
 func TestReviseDropsRendition(t *testing.T) {
 	s := newStore(t)
 	fakeLector(t, s)
-	r := put(t, s, "first", PutOptions{Filename: "a.pdf", Mime: "application/pdf"})
+	r := put(t, s, "first", PutOptions{Sphere: "perso", Filename: "a.pdf", Mime: "application/pdf"})
 	if _, err := s.Render(r.URI, false); err != nil {
 		t.Fatal(err)
 	}

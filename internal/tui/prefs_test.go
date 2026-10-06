@@ -10,12 +10,12 @@ import (
 )
 
 func TestPrefsSurviveARestart(t *testing.T) {
-	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso", "pro"}, DefaultSphere: "perso"}
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso", "pro"}}
 	st, _ := store.Open(cfg, nil, "test")
 	defer st.Close()
 	st.Init()
 	st.Plans().Save([]byte("id: h\ntitle: Household\nsphere: perso\nnodes:\n  - notation: \"3\"\n    label: Health\n    children:\n      - notation: \"3.2\"\n        label: Insurance\n"), false)
-	st.Put(strings.NewReader("a"), store.PutOptions{Filename: "a.pdf"})
+	st.Put(strings.NewReader("a"), store.PutOptions{Sphere: "perso", Filename: "a.pdf"})
 	path := filepath.Join(t.TempDir(), "tui.json")
 	locate := func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil }
 

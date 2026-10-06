@@ -12,7 +12,7 @@ import (
 // The objects artefact writes must pass an independent OCFL validator.
 func TestObjectsPassOCFLValidator(t *testing.T) {
 	s := newStore(t)
-	r := put(t, s, "%PDF-1.7 conformance", PutOptions{Filename: "scan.pdf"})
+	r := put(t, s, "%PDF-1.7 conformance", PutOptions{Sphere: "perso", Filename: "scan.pdf"})
 	if _, err := s.EditCard(r.ID, []string{"title=Changed"}, ""); err != nil {
 		t.Fatal(err)
 	}

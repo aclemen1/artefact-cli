@@ -16,10 +16,10 @@ func titles(items []ListItem) []string {
 
 func TestSortOrders(t *testing.T) {
 	s := newStore(t)
-	put(t, s, "bbbb facture", PutOptions{Filename: "b.txt", Date: "2024-05-01"})
-	put(t, s, "a", PutOptions{Filename: "a.txt", Date: "2026-01-01"})
-	put(t, s, "cc facture facture", PutOptions{Filename: "c.txt", Date: "2025-03-01"})
-	put(t, s, "d", PutOptions{Filename: "d.txt", Date: "2026-06-01"})
+	put(t, s, "bbbb facture", PutOptions{Sphere: "perso", Filename: "b.txt", Date: "2024-05-01"})
+	put(t, s, "a", PutOptions{Sphere: "perso", Filename: "a.txt", Date: "2026-01-01"})
+	put(t, s, "cc facture facture", PutOptions{Sphere: "perso", Filename: "c.txt", Date: "2025-03-01"})
+	put(t, s, "d", PutOptions{Sphere: "perso", Filename: "d.txt", Date: "2026-06-01"})
 	cases := map[string][]string{
 		"date":       {"d", "a", "c", "b"},
 		"date:asc":   {"b", "c", "a", "d"},

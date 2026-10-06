@@ -13,7 +13,7 @@ import (
 )
 
 func TestTree(t *testing.T) {
-	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso", "pro"}, DefaultSphere: "perso"}
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso", "pro"}}
 	st, err := store.Open(cfg, nil, "test")
 	if err != nil {
 		t.Fatal(err)
@@ -26,7 +26,7 @@ func TestTree(t *testing.T) {
 	cfg.Keys = map[string]string{"perso": rcp}
 	st.Keys = keys.Memory{"perso": id}
 
-	clear, err := st.Put(strings.NewReader("v1"), store.PutOptions{Filename: "scan.PDF"})
+	clear, err := st.Put(strings.NewReader("v1"), store.PutOptions{Sphere: "perso", Filename: "scan.PDF"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestTree(t *testing.T) {
 	if _, err := st.EditCard(clear.ID, []string{"filename=renamed.docx"}, ""); err != nil {
 		t.Fatal(err)
 	}
-	sealed, err := st.Put(strings.NewReader("hidden"), store.PutOptions{Filename: "s.txt", Seal: true})
+	sealed, err := st.Put(strings.NewReader("hidden"), store.PutOptions{Sphere: "perso", Filename: "s.txt", Seal: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,11 +81,11 @@ func TestTree(t *testing.T) {
 }
 
 func TestArchivedHiddenButReachable(t *testing.T) {
-	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}, DefaultSphere: "perso"}
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}}
 	st, _ := store.Open(cfg, nil, "test")
 	defer st.Close()
 	st.Init()
-	a, _ := st.Put(strings.NewReader("x"), store.PutOptions{Filename: "a.pdf"})
+	a, _ := st.Put(strings.NewReader("x"), store.PutOptions{Sphere: "perso", Filename: "a.pdf"})
 	if _, err := st.Archive(a.ID, true, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestArchivedHiddenButReachable(t *testing.T) {
 }
 
 func TestPlansView(t *testing.T) {
-	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}, DefaultSphere: "perso"}
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}}
 	st, _ := store.Open(cfg, nil, "test")
 	defer st.Close()
 	st.Init()
@@ -108,9 +108,9 @@ func TestPlansView(t *testing.T) {
 	if _, err := st.Plans().Save([]byte(plan), false); err != nil {
 		t.Fatal(err)
 	}
-	a, _ := st.Put(strings.NewReader("aaa"), store.PutOptions{Filename: "x.pdf", Title: "Décompte: Assura"})
-	b, _ := st.Put(strings.NewReader("bbb"), store.PutOptions{Filename: "y.pdf", Title: "Décompte: Assura"})
-	st.Put(strings.NewReader("ccc"), store.PutOptions{Filename: "z.txt", Title: "Note"})
+	a, _ := st.Put(strings.NewReader("aaa"), store.PutOptions{Sphere: "perso", Filename: "x.pdf", Title: "Décompte: Assura"})
+	b, _ := st.Put(strings.NewReader("bbb"), store.PutOptions{Sphere: "perso", Filename: "y.pdf", Title: "Décompte: Assura"})
+	st.Put(strings.NewReader("ccc"), store.PutOptions{Sphere: "perso", Filename: "z.txt", Title: "Note"})
 	st.SetClass(a.ID, "household", "3.2", "alain")
 	st.SetClass(b.ID, "household", "3.2", "alain")
 	tr := New(st, "perso")

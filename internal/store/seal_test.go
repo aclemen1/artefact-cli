@@ -78,7 +78,7 @@ func grepStore(t *testing.T, s *Store, sphere, needle string) bool {
 func TestPutSealed(t *testing.T) {
 	s := sealedStore(t)
 	secret := "PIN 4512 for the card"
-	r := put(t, s, secret, PutOptions{Filename: "nip.txt", Seal: true})
+	r := put(t, s, secret, PutOptions{Sphere: "perso", Filename: "nip.txt", Seal: true})
 	if !r.Sealed || r.Size != int64(len(secret)) {
 		t.Fatalf("result %+v", r)
 	}
@@ -91,16 +91,16 @@ func TestPutSealed(t *testing.T) {
 	if got := read(t, s, r.ID, "", true); got != secret {
 		t.Errorf("revealed %q", got)
 	}
-	again := put(t, s, secret, PutOptions{Filename: "other.txt", Seal: true, Holds: []index.Holder{{By: "mnemo", Ref: "C9"}}})
+	again := put(t, s, secret, PutOptions{Sphere: "perso", Filename: "other.txt", Seal: true, Holds: []index.Holder{{By: "mnemo", Ref: "C9"}}})
 	if again.Status != "known" || again.ID != r.ID {
 		t.Errorf("same sealed payload: %+v", again)
 	}
-	clear := put(t, s, secret, PutOptions{Filename: "nip.txt"})
+	clear := put(t, s, secret, PutOptions{Sphere: "perso", Filename: "nip.txt"})
 	if clear.ID == r.ID {
 		t.Error("a clear deposit must not match a sealed artefact")
 	}
-	k1 := put(t, s, "abc", PutOptions{Seal: true, Key: "K"})
-	k2 := put(t, s, "abc", PutOptions{Seal: true, Key: "K"})
+	k1 := put(t, s, "abc", PutOptions{Sphere: "perso", Seal: true, Key: "K"})
+	k2 := put(t, s, "abc", PutOptions{Sphere: "perso", Seal: true, Key: "K"})
 	if k1.ID != k2.ID {
 		t.Error("idempotency key on a sealed payload")
 	}
@@ -113,7 +113,7 @@ func TestPutSealed(t *testing.T) {
 
 func TestSealErasesClearVersions(t *testing.T) {
 	s := sealedStore(t)
-	r := put(t, s, "clear v1 TOPSECRET", PutOptions{Filename: "codes.txt", Key: "K1", Holds: []index.Holder{{By: "mnemo", Ref: "C"}}})
+	r := put(t, s, "clear v1 TOPSECRET", PutOptions{Sphere: "perso", Filename: "codes.txt", Key: "K1", Holds: []index.Holder{{By: "mnemo", Ref: "C"}}})
 	tmp := filepath.Join(t.TempDir(), "v2.txt")
 	os.WriteFile(tmp, []byte("clear v2 TOPSECRET"), 0o644)
 	if _, err := s.Redact(r.ID, tmp, false); err != nil {
@@ -143,7 +143,7 @@ func TestSealErasesClearVersions(t *testing.T) {
 	if _, err := s.Reindex("perso"); err != nil {
 		t.Fatal(err)
 	}
-	again := put(t, s, "clear v2 TOPSECRET", PutOptions{Seal: true})
+	again := put(t, s, "clear v2 TOPSECRET", PutOptions{Sphere: "perso", Seal: true})
 	if again.ID != r.ID {
 		t.Error("sealed artefact not found by its keyed digest after reindex")
 	}
@@ -151,7 +151,7 @@ func TestSealErasesClearVersions(t *testing.T) {
 
 func TestRedact(t *testing.T) {
 	s := sealedStore(t)
-	r := put(t, s, "name: Jean, AVS 756.1234", PutOptions{Filename: "note.md"})
+	r := put(t, s, "name: Jean, AVS 756.1234", PutOptions{Sphere: "perso", Filename: "note.md"})
 	tmp := filepath.Join(t.TempDir(), "red.md")
 	os.WriteFile(tmp, []byte("name: Jean, AVS •••"), 0o644)
 	res, err := s.Redact(r.ID, tmp, false)
@@ -180,8 +180,8 @@ func TestRedact(t *testing.T) {
 
 func TestEraseWhole(t *testing.T) {
 	s := sealedStore(t)
-	a := put(t, s, "erase me", PutOptions{Filename: "a.txt", Holds: []index.Holder{{By: "mnemo", Ref: "C"}}})
-	b := put(t, s, "keep me", PutOptions{Filename: "b.txt"})
+	a := put(t, s, "erase me", PutOptions{Sphere: "perso", Filename: "a.txt", Holds: []index.Holder{{By: "mnemo", Ref: "C"}}})
+	b := put(t, s, "keep me", PutOptions{Sphere: "perso", Filename: "b.txt"})
 	var ue *UserError
 	if _, err := s.PlanErase(EraseRequest{Refs: []string{a.ID}}); !errors.As(err, &ue) {
 		t.Fatalf("a held artefact must need --force, got %v", err)
@@ -227,7 +227,7 @@ func TestEraseWhole(t *testing.T) {
 
 func TestEraseVersionAndChangedPlan(t *testing.T) {
 	s := sealedStore(t)
-	r := put(t, s, "v1 PRIVATE", PutOptions{Filename: "n.txt"})
+	r := put(t, s, "v1 PRIVATE", PutOptions{Sphere: "perso", Filename: "n.txt"})
 	tmp := filepath.Join(t.TempDir(), "v2.txt")
 	os.WriteFile(tmp, []byte("v2 public"), 0o644)
 	if _, err := s.Redact(r.ID, tmp, false); err != nil {
@@ -263,7 +263,7 @@ func TestEraseVersionAndChangedPlan(t *testing.T) {
 
 func TestEraseCodeExpires(t *testing.T) {
 	s := sealedStore(t)
-	r := put(t, s, "x", PutOptions{Filename: "x.txt"})
+	r := put(t, s, "x", PutOptions{Sphere: "perso", Filename: "x.txt"})
 	plan, err := s.PlanErase(EraseRequest{Refs: []string{r.ID}})
 	if err != nil {
 		t.Fatal(err)
@@ -279,7 +279,7 @@ func TestEraseCodeExpires(t *testing.T) {
 
 func TestRecoverPutsBackAnInterruptedSwap(t *testing.T) {
 	s := newStore(t)
-	r := put(t, s, "survive", PutOptions{Filename: "s.txt"})
+	r := put(t, s, "survive", PutOptions{Sphere: "perso", Filename: "s.txt"})
 	ref, _ := s.Resolve(r.ID)
 	root := s.root("perso")
 	// Simulate a crash between the two renames of a rebuild.

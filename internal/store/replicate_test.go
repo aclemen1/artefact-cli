@@ -42,8 +42,8 @@ func grepDir(t *testing.T, dir, needle string) bool {
 func TestSyncMirrorsTheStore(t *testing.T) {
 	s, dir := replicated(t)
 	ctx := context.Background()
-	clear := put(t, s, "CLEARCONTENT", PutOptions{Filename: "a.pdf", Title: "Clear title"})
-	put(t, s, "SECRETCONTENT", PutOptions{Filename: "b.txt", Title: "Secret title", Seal: true})
+	clear := put(t, s, "CLEARCONTENT", PutOptions{Sphere: "perso", Filename: "a.pdf", Title: "Clear title"})
+	put(t, s, "SECRETCONTENT", PutOptions{Sphere: "perso", Filename: "b.txt", Title: "Secret title", Seal: true})
 	cov, _ := s.Coverage("perso")
 	if cov[0].BelowNumCopies != 2 {
 		t.Fatalf("before sync: %+v", cov[0])
@@ -85,7 +85,7 @@ func TestSyncMirrorsTheStore(t *testing.T) {
 func TestRewritesPurgeTheBackend(t *testing.T) {
 	s, dir := replicated(t)
 	ctx := context.Background()
-	r := put(t, s, "OLDVERSION", PutOptions{Filename: "n.md"})
+	r := put(t, s, "OLDVERSION", PutOptions{Sphere: "perso", Filename: "n.md"})
 	if _, err := s.Sync(ctx, "perso", false); err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestRewritesPurgeTheBackend(t *testing.T) {
 func TestFsckFindsABadCopy(t *testing.T) {
 	s, dir := replicated(t)
 	ctx := context.Background()
-	r := put(t, s, "GOOD", PutOptions{Filename: "g.txt"})
+	r := put(t, s, "GOOD", PutOptions{Sphere: "perso", Filename: "g.txt"})
 	if _, err := s.Sync(ctx, "perso", false); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestFsckFindsABadCopy(t *testing.T) {
 func TestSyncPublishesProgress(t *testing.T) {
 	s, _ := replicated(t)
 	for i := 0; i < 3; i++ {
-		put(t, s, strings.Repeat("x", i+1), PutOptions{Filename: "f.txt"})
+		put(t, s, strings.Repeat("x", i+1), PutOptions{Sphere: "perso", Filename: "f.txt"})
 	}
 	if _, err := s.Sync(context.Background(), "perso", false); err != nil {
 		t.Fatal(err)

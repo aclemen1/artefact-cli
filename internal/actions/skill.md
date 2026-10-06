@@ -7,7 +7,7 @@ description: Keeps files (PDFs, images, documents, media) as artefacts with a st
 
 | Need | Command |
 |---|---|
-| Store a file | `artefact put <file>` · `… \| artefact put - --filename <name>` |
+| Store a file | `artefact put <file> --sphere <perso\|pro>` · `… \| artefact put - --sphere <s> --filename <name>` |
 | Read a file | `artefact get <id> --out <path>` |
 | Read a file's text | `artefact get <id> --rendition text` (make it: `artefact render <id>`) |
 | Search | `artefact search <words> ["phrase"] [-word] [type:pdf] [class:<label>] [after:2024] [is:pending]` (grammar: `artefact schema artefacts search`) |
@@ -18,6 +18,7 @@ description: Keeps files (PDFs, images, documents, media) as artefacts with a st
 | Exact parameters of an action | `artefact schema artefacts <action>` |
 
 - An artefact is named by a ULID or by `artefact://<sphere>/<id>`.
+- `put` needs `--sphere`, chosen by the content (a UNISIS document goes to pro); there is no default.
 - `put` of a file already stored returns `status: known` with the same id.
 - Answers are `{"ok": true, "result": …}` or `{"ok": false, "error": {…}}`;
   the error message shows the call to make.

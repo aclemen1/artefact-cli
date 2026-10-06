@@ -13,9 +13,8 @@ import (
 )
 
 type Config struct {
-	Store         string   `yaml:"store"`
-	Spheres       []string `yaml:"spheres"`
-	DefaultSphere string   `yaml:"default_sphere"`
+	Store   string   `yaml:"store"`
+	Spheres []string `yaml:"spheres"`
 	// Keys maps a sphere to its age recipient (public key).
 	Keys  map[string]string `yaml:"keys,omitempty"`
 	Erase Erase             `yaml:"erase,omitempty"`
@@ -191,7 +190,7 @@ func DefaultPath() string {
 }
 
 func Default() *Config {
-	return &Config{Store: "~/artefact", Spheres: []string{"perso"}, DefaultSphere: "perso"}
+	return &Config{Store: "~/artefact", Spheres: []string{"perso"}}
 }
 
 // Load reads the configuration at path (DefaultPath when empty).
@@ -226,12 +225,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("configuration: sphere %q must be lower-case letters, digits and dashes", s)
 		}
 	}
-	if c.DefaultSphere == "" {
-		c.DefaultSphere = c.Spheres[0]
-	}
-	if !slices.Contains(c.Spheres, c.DefaultSphere) {
-		return fmt.Errorf("configuration: default_sphere %q is not in spheres %v", c.DefaultSphere, c.Spheres)
-	}
+
 	for name, b := range c.Backends {
 		if b.Remote == "" || !slices.Contains(c.Spheres, b.Sphere) {
 			return fmt.Errorf("configuration: backend %q needs a remote and one configured sphere, got remote %q sphere %q", name, b.Remote, b.Sphere)

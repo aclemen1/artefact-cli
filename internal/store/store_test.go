@@ -19,7 +19,7 @@ func newStore(t *testing.T, spheres ...string) *Store {
 	if len(spheres) == 0 {
 		spheres = []string{"perso", "pro"}
 	}
-	cfg := &config.Config{Store: t.TempDir(), Spheres: spheres, DefaultSphere: spheres[0]}
+	cfg := &config.Config{Store: t.TempDir(), Spheres: spheres}
 	s, err := Open(cfg, nil, "test")
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +42,7 @@ func put(t *testing.T, s *Store, content string, o PutOptions) *PutResult {
 
 func TestPutCreatesValidObject(t *testing.T) {
 	s := newStore(t)
-	r := put(t, s, "%PDF-1.7 hello", PutOptions{Filename: "ordonnance-2026-09.pdf", Date: "2026-09-18"})
+	r := put(t, s, "%PDF-1.7 hello", PutOptions{Sphere: "perso", Filename: "ordonnance-2026-09.pdf", Date: "2026-09-18"})
 	if r.Status != "created" || r.Version != 1 || r.Sphere != "perso" {
 		t.Fatalf("unexpected result %+v", r)
 	}
@@ -83,8 +83,8 @@ func TestPutCreatesValidObject(t *testing.T) {
 
 func TestPutIsIdempotentWithinSphere(t *testing.T) {
 	s := newStore(t)
-	a := put(t, s, "same bytes", PutOptions{Filename: "a.txt", Holds: []index.Holder{{By: "mnemo", Ref: "C1"}}})
-	b := put(t, s, "same bytes", PutOptions{Filename: "b.txt", Holds: []index.Holder{{By: "mnemo", Ref: "C2"}}})
+	a := put(t, s, "same bytes", PutOptions{Sphere: "perso", Filename: "a.txt", Holds: []index.Holder{{By: "mnemo", Ref: "C1"}}})
+	b := put(t, s, "same bytes", PutOptions{Sphere: "perso", Filename: "b.txt", Holds: []index.Holder{{By: "mnemo", Ref: "C2"}}})
 	if b.Status != "known" || b.ID != a.ID {
 		t.Fatalf("second put = %+v, want known %s", b, a.ID)
 	}
@@ -99,12 +99,12 @@ func TestPutIsIdempotentWithinSphere(t *testing.T) {
 
 func TestPutKey(t *testing.T) {
 	s := newStore(t)
-	a := put(t, s, "v1", PutOptions{Filename: "x.txt", Key: "K"})
-	b := put(t, s, "v1", PutOptions{Filename: "x.txt", Key: "K"})
+	a := put(t, s, "v1", PutOptions{Sphere: "perso", Filename: "x.txt", Key: "K"})
+	b := put(t, s, "v1", PutOptions{Sphere: "perso", Filename: "x.txt", Key: "K"})
 	if b.ID != a.ID || b.Status != "known" {
 		t.Fatalf("replay = %+v", b)
 	}
-	_, err := s.Put(strings.NewReader("other"), PutOptions{Filename: "x.txt", Key: "K"})
+	_, err := s.Put(strings.NewReader("other"), PutOptions{Sphere: "perso", Filename: "x.txt", Key: "K"})
 	var ue *UserError
 	if !errors.As(err, &ue) {
 		t.Fatalf("a key reused for another payload must fail, got %v", err)
@@ -112,7 +112,7 @@ func TestPutKey(t *testing.T) {
 	if _, err := s.Reindex(""); err != nil {
 		t.Fatal(err)
 	}
-	c := put(t, s, "v1", PutOptions{Filename: "x.txt", Key: "K"})
+	c := put(t, s, "v1", PutOptions{Sphere: "perso", Filename: "x.txt", Key: "K"})
 	if c.ID != a.ID {
 		t.Errorf("key lost by reindex")
 	}
@@ -120,7 +120,7 @@ func TestPutKey(t *testing.T) {
 
 func TestHoldReleaseIdempotent(t *testing.T) {
 	s := newStore(t)
-	r := put(t, s, "x", PutOptions{Filename: "x.bin"})
+	r := put(t, s, "x", PutOptions{Sphere: "perso", Filename: "x.bin"})
 	for range 2 {
 		if _, err := s.Hold(r.ID, "mnemo", "C1"); err != nil {
 			t.Fatal(err)
@@ -151,7 +151,7 @@ func TestHoldReleaseIdempotent(t *testing.T) {
 
 func TestCardEditAndReindex(t *testing.T) {
 	s := newStore(t)
-	r := put(t, s, "x", PutOptions{Filename: "scan.png"})
+	r := put(t, s, "x", PutOptions{Sphere: "perso", Filename: "scan.png"})
 	if _, err := s.EditCard(r.ID, []string{"title=Ordonnance", "dc.creator=Dr X", "x.mnemo.note=AVS"}, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestGetAndSpheres(t *testing.T) {
 
 func TestPutFromStdinWithoutName(t *testing.T) {
 	s := newStore(t)
-	r := put(t, s, "plain text\n", PutOptions{})
+	r := put(t, s, "plain text\n", PutOptions{Sphere: "perso"})
 	if r.Title != r.ID {
 		t.Errorf("title = %q, want the id", r.Title)
 	}
@@ -228,8 +228,8 @@ func TestPutFromStdinWithoutName(t *testing.T) {
 
 func TestUsage(t *testing.T) {
 	s := newStore(t)
-	put(t, s, "12345", PutOptions{Filename: "a.txt", Holds: []index.Holder{{By: "mnemo", Ref: "C"}}})
-	put(t, s, "678", PutOptions{Filename: "b.txt"})
+	put(t, s, "12345", PutOptions{Sphere: "perso", Filename: "a.txt", Holds: []index.Holder{{By: "mnemo", Ref: "C"}}})
+	put(t, s, "678", PutOptions{Sphere: "perso", Filename: "b.txt"})
 	u, err := s.Usage("perso")
 	if err != nil {
 		t.Fatal(err)

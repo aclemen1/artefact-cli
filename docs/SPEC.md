@@ -672,9 +672,14 @@ default application. A sealed artefact is refused with a message.
 
 ## 12. Spheres and access
 
+There is no default sphere. The sphere of a deposit follows the nature of
+its content (a UNISIS document goes to pro, whatever office deposits it):
+`put` (CLI, REST, MCP), `token create` and `mount` refuse to run without it.
+Reads run over every granted sphere unless one is named.
+
 | Surface | Granted spheres |
 |---|---|
-| local CLI | `spheres` from the configuration, default `default_sphere` |
+| local CLI | `spheres` from the configuration; every write names its sphere |
 | MCP stdio | `artefact mcp --spheres <list>` |
 | REST and MCP HTTP | the token's spheres |
 
@@ -815,7 +820,6 @@ becomes a relay to `get`.
 ```yaml
 store: ~/artefact
 spheres: [perso, pro]
-default_sphere: perso
 keys:
   perso: age1…            # private key in the keychain
   pro:   age1…

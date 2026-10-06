@@ -63,7 +63,7 @@ func typeText(t *testing.T, m *model, s string) {
 func screen(m *model) string { return ansi.Strip(m.render()) }
 
 func TestTUI(t *testing.T) {
-	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso", "pro"}, DefaultSphere: "perso"}
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso", "pro"}}
 	st, err := store.Open(cfg, nil, "test")
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestTUI(t *testing.T) {
 	id, rcp, _ := keys.Generate()
 	cfg.Keys = map[string]string{"perso": rcp}
 	st.Keys = keys.Memory{"perso": id}
-	a, _ := st.Put(strings.NewReader("ordonnance"), store.PutOptions{Filename: "ordonnance.pdf", Title: "Ordonnance septembre"})
+	a, _ := st.Put(strings.NewReader("ordonnance"), store.PutOptions{Sphere: "perso", Filename: "ordonnance.pdf", Title: "Ordonnance septembre"})
 	st.Put(strings.NewReader("facture"), store.PutOptions{Filename: "facture.pdf", Title: "Facture Romande Energie", Sphere: "pro", Holds: []index.Holder{{By: "mnemo", Ref: "C"}}})
 
 	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
@@ -147,14 +147,14 @@ func TestTUI(t *testing.T) {
 }
 
 func TestOpenSealedAsksThenCleansUp(t *testing.T) {
-	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}, DefaultSphere: "perso"}
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}}
 	st, _ := store.Open(cfg, nil, "test")
 	defer st.Close()
 	st.Init()
 	id, rcp, _ := keys.Generate()
 	cfg.Keys = map[string]string{"perso": rcp}
 	st.Keys = keys.Memory{"perso": id}
-	a, _ := st.Put(strings.NewReader("TOPSECRET"), store.PutOptions{Filename: "codes.txt", Seal: true})
+	a, _ := st.Put(strings.NewReader("TOPSECRET"), store.PutOptions{Sphere: "perso", Filename: "codes.txt", Seal: true})
 	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
 	m.w, m.h = 120, 30
 	drive(t, m, m.Init())
@@ -187,11 +187,11 @@ func TestOpenSealedAsksThenCleansUp(t *testing.T) {
 }
 
 func TestEditContent(t *testing.T) {
-	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}, DefaultSphere: "perso"}
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}}
 	st, _ := store.Open(cfg, nil, "test")
 	defer st.Close()
 	st.Init()
-	a, _ := st.Put(strings.NewReader("draft"), store.PutOptions{Filename: "note.md"})
+	a, _ := st.Put(strings.NewReader("draft"), store.PutOptions{Sphere: "perso", Filename: "note.md"})
 	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
 	m.w, m.h = 120, 30
 	drive(t, m, m.Init())
@@ -224,13 +224,13 @@ func TestEditContent(t *testing.T) {
 }
 
 func TestPlansView(t *testing.T) {
-	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}, DefaultSphere: "perso"}
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}}
 	st, _ := store.Open(cfg, nil, "test")
 	defer st.Close()
 	st.Init()
 	st.Plans().Save([]byte("id: h\ntitle: Household\nsphere: perso\nnodes:\n  - notation: \"3\"\n    label: Health\n    children:\n      - notation: \"3.2\"\n        label: Insurance\n  - notation: \"4\"\n    label: Housing\n"), false)
-	a, _ := st.Put(strings.NewReader("a"), store.PutOptions{Filename: "a.pdf", Title: "Assura"})
-	st.Put(strings.NewReader("b"), store.PutOptions{Filename: "b.pdf", Title: "Bail"})
+	a, _ := st.Put(strings.NewReader("a"), store.PutOptions{Sphere: "perso", Filename: "a.pdf", Title: "Assura"})
+	st.Put(strings.NewReader("b"), store.PutOptions{Sphere: "perso", Filename: "b.pdf", Title: "Bail"})
 	st.SetClass(a.ID, "h", "3.2", "alain")
 	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
 	m.w, m.h = 120, 30
@@ -305,13 +305,13 @@ func TestPlansView(t *testing.T) {
 }
 
 func TestTreeDoesWhatTheListDoes(t *testing.T) {
-	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}, DefaultSphere: "perso"}
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}}
 	st, _ := store.Open(cfg, nil, "test")
 	defer st.Close()
 	st.Init()
 	st.Plans().Save([]byte("id: h\ntitle: Household\nsphere: perso\nnodes:\n  - notation: \"3\"\n    label: Health\n  - notation: \"4\"\n    label: Housing\n"), false)
-	a, _ := st.Put(strings.NewReader("a"), store.PutOptions{Filename: "a.pdf", Title: "Assura"})
-	st.Put(strings.NewReader("b"), store.PutOptions{Filename: "b.pdf", Title: "Bail"})
+	a, _ := st.Put(strings.NewReader("a"), store.PutOptions{Sphere: "perso", Filename: "a.pdf", Title: "Assura"})
+	st.Put(strings.NewReader("b"), store.PutOptions{Sphere: "perso", Filename: "b.pdf", Title: "Bail"})
 	st.SetClass(a.ID, "h", "3", "alain")
 	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
 	m.w, m.h = 120, 30
@@ -361,11 +361,11 @@ func TestTreeDoesWhatTheListDoes(t *testing.T) {
 }
 
 func TestWatchReloadsOnOutsideChangesOnly(t *testing.T) {
-	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}, DefaultSphere: "perso"}
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}}
 	st, _ := store.Open(cfg, nil, "test")
 	defer st.Close()
 	st.Init()
-	st.Put(strings.NewReader("a"), store.PutOptions{Filename: "a.pdf", Title: "A"})
+	st.Put(strings.NewReader("a"), store.PutOptions{Sphere: "perso", Filename: "a.pdf", Title: "A"})
 	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
 	m.w, m.h = 120, 30
 	drive(t, m, m.Init())
@@ -383,7 +383,7 @@ func TestWatchReloadsOnOutsideChangesOnly(t *testing.T) {
 	}
 	// Another process deposits.
 	other, _ := store.Open(cfg, nil, "other")
-	other.Put(strings.NewReader("b"), store.PutOptions{Filename: "b.pdf", Title: "B"})
+	other.Put(strings.NewReader("b"), store.PutOptions{Sphere: "perso", Filename: "b.pdf", Title: "B"})
 	other.Close()
 	cmd := tickOnce()
 	if cmd == nil {
@@ -407,11 +407,11 @@ func TestWatchReloadsOnOutsideChangesOnly(t *testing.T) {
 }
 
 func TestSearchShowsItsPhase(t *testing.T) {
-	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}, DefaultSphere: "perso"}
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}}
 	st, _ := store.Open(cfg, nil, "test")
 	defer st.Close()
 	st.Init()
-	st.Put(strings.NewReader("quittance de loyer"), store.PutOptions{Filename: "q.txt", Title: "Quittance"})
+	st.Put(strings.NewReader("quittance de loyer"), store.PutOptions{Sphere: "perso", Filename: "q.txt", Title: "Quittance"})
 	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
 	m.w, m.h = 120, 30
 	drive(t, m, m.Init())
@@ -428,12 +428,12 @@ func TestSearchShowsItsPhase(t *testing.T) {
 }
 
 func TestEscGoesBackQQuits(t *testing.T) {
-	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}, DefaultSphere: "perso"}
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}}
 	st, _ := store.Open(cfg, nil, "test")
 	defer st.Close()
 	st.Init()
 	st.Plans().Save([]byte("id: h\ntitle: Household\nsphere: perso\nnodes:\n  - notation: \"3\"\n    label: Health\n"), false)
-	st.Put(strings.NewReader("a"), store.PutOptions{Filename: "a.pdf", Title: "Assura"})
+	st.Put(strings.NewReader("a"), store.PutOptions{Sphere: "perso", Filename: "a.pdf", Title: "Assura"})
 	fresh := func() *model {
 		m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
 		m.w, m.h = 120, 30

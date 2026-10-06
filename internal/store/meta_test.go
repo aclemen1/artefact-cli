@@ -15,7 +15,7 @@ import (
 
 func TestReviseKeepsVersions(t *testing.T) {
 	s := sealedStore(t)
-	r := put(t, s, "first", PutOptions{Filename: "n.md"})
+	r := put(t, s, "first", PutOptions{Sphere: "perso", Filename: "n.md"})
 	p := filepath.Join(t.TempDir(), "n.md")
 	os.WriteFile(p, []byte("second"), 0o644)
 	res, err := s.Revise(r.ID, p)
@@ -29,7 +29,7 @@ func TestReviseKeepsVersions(t *testing.T) {
 	if ev := st[0].Events[len(st[0].Events)-1]; ev.Type != "revise" {
 		t.Errorf("last event %+v", ev)
 	}
-	sealed := put(t, s, "secret one", PutOptions{Filename: "s.txt", Seal: true})
+	sealed := put(t, s, "secret one", PutOptions{Sphere: "perso", Filename: "s.txt", Seal: true})
 	os.WriteFile(p, []byte("secret two"), 0o644)
 	if _, err := s.Revise(sealed.ID, p); err != nil {
 		t.Fatal(err)
@@ -41,8 +41,8 @@ func TestReviseKeepsVersions(t *testing.T) {
 
 func TestTags(t *testing.T) {
 	s := newStore(t)
-	a := put(t, s, "x", PutOptions{Filename: "a.txt"})
-	put(t, s, "y", PutOptions{Filename: "b.txt"})
+	a := put(t, s, "x", PutOptions{Sphere: "perso", Filename: "a.txt"})
+	put(t, s, "y", PutOptions{Sphere: "perso", Filename: "b.txt"})
 	if _, err := s.Tag(a.ID, []string{"avs", "jeannette", "avs"}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestMetaRoundTrip(t *testing.T) {
 	s := newStore(t)
 	var buf bytes.Buffer
 	png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 4, 3)))
-	r := put(t, s, buf.String(), PutOptions{Filename: "photo.png"})
+	r := put(t, s, buf.String(), PutOptions{Sphere: "perso", Filename: "photo.png"})
 	if _, err := s.EditCard(r.ID, []string{"title=Plage de La Tour", "date=2024-07-23", "dc.creator=Alain Clément"}, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -91,12 +91,12 @@ func TestMetaRoundTrip(t *testing.T) {
 	os.WriteFile(p, buf.Bytes(), 0o644)
 	meta.Write(p, meta.Fields{Date: "2019-05-02"})
 	b, _ := os.ReadFile(p)
-	r2 := put(t, s, string(b), PutOptions{Filename: "x.png"})
+	r2 := put(t, s, string(b), PutOptions{Sphere: "perso", Filename: "x.png"})
 	st, _, _ := s.Stat([]string{r2.ID}, false)
 	if st[0].Card.Date != "2019-05-02" {
 		t.Errorf("deposit date from the file: %s", st[0].Card.Date)
 	}
-	if _, err := s.WriteMeta(put(t, s, "plain", PutOptions{Filename: "n.md"}).ID); err == nil {
+	if _, err := s.WriteMeta(put(t, s, "plain", PutOptions{Sphere: "perso", Filename: "n.md"}).ID); err == nil {
 		t.Error("metadata cannot be written into a Markdown file")
 	}
 }

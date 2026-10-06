@@ -89,7 +89,8 @@ func init() {
 		Discussion: "Idempotent within the sphere: a payload already stored returns its artefact with status known, plus the holders recorded on it. --key makes a retried deposit return the first result. A deposit is atomic: an interrupted put leaves nothing.",
 		Params: []spec.Param{
 			{Name: "file", Kind: spec.String, Positional: true, Required: true, Help: "File to deposit, or - to read the payload from standard input."},
-			{Name: "sphere", Kind: spec.String, Help: "Sphere to deposit into. Defaults to the configured default sphere."},
+			{Name: "sphere", Kind: spec.String, Required: true, Help: "Sphere to deposit into, chosen by the nature of the content (a UNISIS document goes to pro); there is no default.",
+				Missing: "put needs --sphere: the sphere follows the content (a UNISIS document goes to pro), never a default. Example: artefact put scan.pdf --sphere pro"},
 			{Name: "filename", Kind: spec.String, Help: "File name to record, for a payload read from standard input (sets the extension)."},
 			{Name: "title", Kind: spec.String, Help: "Title of the card. Defaults to the file name without extension."},
 			{Name: "date", Kind: spec.String, Help: "Date of the content, YYYY-MM-DD. Defaults to today."},
@@ -101,12 +102,12 @@ func init() {
 			{Name: "render", Kind: spec.Bool, Help: "Make the text rendition with lector before answering (unsealed artefacts only)."},
 		},
 		Examples: []string{
-			"artefact put ordonnance-2026-09.pdf",
-			"artefact put facture.pdf --render",
+			"artefact put ordonnance-2026-09.pdf --sphere perso",
+			"artefact put facture.pdf --sphere perso --render",
 			"artefact put scan.png --sphere perso --hold mnemo:01K6Z8Q4V7XW3D9JH2M5N8P0QR --key 01K6Z8Q4V7XW3D9JH2M5N8P0QR",
-			"cat note.txt | artefact put - --filename note.txt --title \"Note de séance\" --date 2026-09-18",
-			"artefact put facture.pdf --card 'dc: {creator: Romande Energie}'",
-			"artefact put codes-2fa.png --seal",
+			"cat note.txt | artefact put - --sphere pro --filename note.txt --title \"Note de séance\" --date 2026-09-18",
+			"artefact put facture.pdf --sphere perso --card 'dc: {creator: Romande Energie}'",
+			"artefact put codes-2fa.png --sphere perso --seal",
 		},
 		Effects: []string{"Writes a new OCFL object (payload, card, event log) into the sphere's store, unless the payload is known.", "Records the holders given with --hold."},
 		Run: func(ctx *spec.Context) (any, error) {
@@ -486,7 +487,6 @@ func init() {
 				}
 				if v := ctx.Str("spheres"); v != "" {
 					cfg.Spheres = strings.Split(v, ",")
-					cfg.DefaultSphere = cfg.Spheres[0]
 				}
 				if err := cfg.Validate(); err != nil {
 					return nil, spec.UserError("%v", err)

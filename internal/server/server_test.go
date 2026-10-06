@@ -30,7 +30,7 @@ type env struct {
 func start(t *testing.T) *env {
 	t.Helper()
 	dir := t.TempDir()
-	cfg := &config.Config{Store: filepath.Join(dir, "store"), Spheres: []string{"perso", "pro"}, DefaultSphere: "perso"}
+	cfg := &config.Config{Store: filepath.Join(dir, "store"), Spheres: []string{"perso", "pro"}}
 	cfgPath := filepath.Join(dir, "config.yaml")
 	if err := cfg.Save(cfgPath); err != nil {
 		t.Fatal(err)
@@ -98,14 +98,14 @@ func TestSocketWithoutToken(t *testing.T) {
 	e := start(t)
 	ctx := context.Background()
 	c := client.NewSocket(e.sock, client.WithAgent("mnemo/test"))
-	r, err := c.Put(ctx, strings.NewReader("hello socket"), client.PutOptions{Filename: "h.txt", Holds: []client.Holder{{By: "mnemo", Ref: "C1"}}, Key: "C1"})
+	r, err := c.Put(ctx, strings.NewReader("hello socket"), client.PutOptions{Sphere: "perso", Filename: "h.txt", Holds: []client.Holder{{By: "mnemo", Ref: "C1"}}, Key: "C1"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r.Status != "created" || r.Sphere != "perso" {
 		t.Fatalf("put %+v", r)
 	}
-	again, err := c.Put(ctx, strings.NewReader("hello socket"), client.PutOptions{Holds: []client.Holder{{By: "mnemo", Ref: "C2"}}})
+	again, err := c.Put(ctx, strings.NewReader("hello socket"), client.PutOptions{Sphere: "perso", Holds: []client.Holder{{By: "mnemo", Ref: "C2"}}})
 	if err != nil || again.Status != "known" || len(again.Holders) != 2 {
 		t.Fatalf("known %+v %v", again, err)
 	}
@@ -148,7 +148,7 @@ func TestSocketWithoutToken(t *testing.T) {
 		t.Errorf("erased artefact: %v", err)
 	}
 	// --force is for a human at the CLI.
-	r2, _ := c.Put(ctx, strings.NewReader("held"), client.PutOptions{Holds: []client.Holder{{By: "x"}}})
+	r2, _ := c.Put(ctx, strings.NewReader("held"), client.PutOptions{Sphere: "perso", Holds: []client.Holder{{By: "x"}}})
 	err = c.Call(ctx, "erase", map[string]any{"id": []string{r2.ID}, "force": true, "plan": true}, nil)
 	if kind(err) != "forbidden" {
 		t.Errorf("force over the socket: %v", err)
@@ -174,7 +174,7 @@ func TestTokensOverHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	reader := client.NewHTTP(e.base, client.WithToken(e.token(t, "r", []string{"perso"}, []string{"read"})))
-	if _, err := reader.Put(ctx, strings.NewReader("x"), client.PutOptions{}); kind(err) != "forbidden" {
+	if _, err := reader.Put(ctx, strings.NewReader("x"), client.PutOptions{Sphere: "perso"}); kind(err) != "forbidden" {
 		t.Errorf("put with a read token: %v", err)
 	}
 	if _, err := reader.Open(ctx, pro.URI, "", false); kind(err) != "user_error" {
@@ -244,7 +244,7 @@ func TestMCPOverHTTP(t *testing.T) {
 		_ = json.Unmarshal([]byte(res.Content[0].(*mcp.TextContent).Text), &env)
 		return env
 	}
-	put := callJSON("put", map[string]any{"content_base64": base64.StdEncoding.EncodeToString([]byte("via mcp")), "filename": "m.txt"})
+	put := callJSON("put", map[string]any{"content_base64": base64.StdEncoding.EncodeToString([]byte("via mcp")), "filename": "m.txt", "sphere": "perso"})
 	if put["ok"] != true {
 		t.Fatalf("put %v", put)
 	}

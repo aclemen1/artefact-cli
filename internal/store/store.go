@@ -131,12 +131,11 @@ func (s *Store) lock(sphere string) (func(), error) {
 	return release, nil
 }
 
+// sphereOrDefault checks that sphere is named and granted; there is no
+// default sphere: a write names the sphere its content belongs to.
 func (s *Store) sphereOrDefault(sphere string) (string, error) {
 	if sphere == "" {
-		sphere = s.Cfg.DefaultSphere
-		if !slices.Contains(s.Spheres, sphere) {
-			sphere = s.Spheres[0]
-		}
+		return "", userErr("name the sphere: --sphere <%s>", strings.Join(s.Spheres, "|"))
 	}
 	if !slices.Contains(s.Spheres, sphere) {
 		return "", userErr("sphere %q is not granted here; granted spheres: %s. Example: --sphere %s", sphere, strings.Join(s.Spheres, ", "), s.Spheres[0])
@@ -263,6 +262,9 @@ func (s *Store) seal(sphere string, r io.Reader) (*sealing, error) {
 // Put deposits r. It is atomic, and idempotent within the sphere by digest
 // (keyed digest for a sealed payload), or by Key when given.
 func (s *Store) Put(r io.Reader, o PutOptions) (*PutResult, error) {
+	if o.Sphere == "" {
+		return nil, userErr("put needs --sphere: the sphere follows the content (a UNISIS document goes to pro), never a default. Example: artefact put scan.pdf --sphere pro")
+	}
 	sphere, err := s.sphereOrDefault(o.Sphere)
 	if err != nil {
 		return nil, err

@@ -26,6 +26,7 @@ func TestPrefsSurviveARestart(t *testing.T) {
 	press(t, m, "s") // perso
 	press(t, m, "t") // date
 	press(t, m, "T") // date ascending
+	m.sel = -1 // nothing selected: the tree opens with its classes closed
 	press(t, m, "C")
 	press(t, m, "j") // 3 Health
 	press(t, m, "l") // open

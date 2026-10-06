@@ -176,7 +176,7 @@ func TestOpenSealedAsksThenCleansUp(t *testing.T) {
 	p := m.revealed[0] + "/codes.txt"
 	b, err := os.ReadFile(p)
 	fi, _ := os.Stat(p)
-	if err != nil || string(b) != "TOPSECRET" || fi.Mode().Perm() != 0o600 {
+	if err != nil || string(b) != "TOPSECRET" || fi.Mode().Perm() != 0o400 {
 		t.Fatalf("decrypted copy: %q %v %v", b, err, fi.Mode())
 	}
 	m.Cleanup()
@@ -235,6 +235,7 @@ func TestPlansView(t *testing.T) {
 	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
 	m.w, m.h = 120, 30
 	drive(t, m, m.Init())
+	m.sel = -1 // nothing selected: the tree opens with its classes closed
 	press(t, m, "C")
 	if m.planView == nil || len(m.planView.rows) != 4 {
 		t.Fatalf("plan rows, classes closed: %+v", m.planView)
@@ -316,6 +317,7 @@ func TestTreeDoesWhatTheListDoes(t *testing.T) {
 	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
 	m.w, m.h = 120, 30
 	drive(t, m, m.Init())
+	m.sel = -1 // nothing selected: the tree opens with its classes closed
 	press(t, m, "C")
 
 	press(t, m, "/")
@@ -483,5 +485,59 @@ func TestEscGoesBackQQuits(t *testing.T) {
 	press(t, m, "esc")
 	if m.mode != modeList {
 		t.Error("esc from the detail must come back to the list")
+	}
+}
+
+func TestReadOnlyEditor(t *testing.T) {
+	for in, want := range map[string]string{
+		"nvim":                  "nvim -M",
+		"/opt/homebrew/bin/vim": "/opt/homebrew/bin/vim -M",
+		"nano":                  "nano -v",
+		"code --wait":           "code --wait",
+	} {
+		if got := readOnlyEditor(in); got != want {
+			t.Errorf("%s: %s, want %s", in, got, want)
+		}
+	}
+}
+
+func TestViewPathPrefersAMountedView(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "a"), 0o755)
+	it := store.ListItem{Row: index.Row{ID: "01M465PV5GC0HRTDEXRKE18C81", Ext: ".pdf"}, Sphere: "zz-test-sphere"}
+	cfg := &config.Config{}
+	cfg.Views.Mounts = map[string]config.Dirs{"zz-test-sphere": {dir}}
+	if p := viewPath(cfg, nil, it, ""); p != "" {
+		t.Fatalf("no file yet, got %s", p)
+	}
+	os.WriteFile(filepath.Join(dir, "a", it.ID+".pdf"), []byte("x"), 0o644)
+	if p := viewPath(cfg, nil, it, ""); p != filepath.Join(dir, "a", it.ID+".pdf") {
+		t.Fatalf("view path %q", p)
+	}
+}
+
+func TestSelectionFollowsBetweenListAndPlans(t *testing.T) {
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}}
+	st, _ := store.Open(cfg, nil, "test")
+	defer st.Close()
+	st.Init()
+	st.Plans().Save([]byte("id: h\ntitle: Household\nsphere: perso\nnodes:\n  - notation: \"3\"\n    label: Health\n    children:\n      - notation: \"3.2\"\n        label: Insurance\n  - notation: \"4\"\n    label: Housing\n"), false)
+	a, _ := st.Put(strings.NewReader("a"), store.PutOptions{Sphere: "perso", Filename: "a.pdf", Title: "Assura"})
+	st.Put(strings.NewReader("b"), store.PutOptions{Sphere: "perso", Filename: "b.pdf", Title: "Bail"})
+	st.Put(strings.NewReader("c"), store.PutOptions{Sphere: "perso", Filename: "c.pdf", Title: "Chauffage"})
+	st.SetClass(a.ID, "h", "3.2", "alain")
+	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
+	m.w, m.h = 120, 30
+	drive(t, m, m.load())
+	m.selectInList(a.URI)
+	press(t, m, "C")
+	if it := m.treeItem(); it == nil || it.ID != a.ID {
+		t.Fatalf("the tree must open on Assura, under 3 › 3.2: %+v", m.planView.rows)
+	}
+	press(t, m, "j") // next row
+	press(t, m, "k") // back on Assura
+	press(t, m, "esc")
+	if it := m.current(); m.planView != nil || it == nil || it.ID != a.ID {
+		t.Fatalf("the list must come back on Assura: %+v", it)
 	}
 }

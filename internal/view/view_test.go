@@ -190,3 +190,44 @@ func TestNoExtensionKeepsFileAndVersionsApart(t *testing.T) {
 		t.Fatalf("a/ lists %v", names)
 	}
 }
+
+func TestPlanPath(t *testing.T) {
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}}
+	st, _ := store.Open(cfg, nil, "test")
+	defer st.Close()
+	st.Init()
+	st.Plans().Save([]byte("id: h\ntitle: Household\nsphere: perso\nnodes:\n  - notation: \"3\"\n    label: Health\n    children:\n      - notation: \"3.2\"\n        label: Insurance\n"), false)
+	a, _ := st.Put(strings.NewReader("a"), store.PutOptions{Sphere: "perso", Filename: "a.pdf", Title: "Assura"})
+	b, _ := st.Put(strings.NewReader("b"), store.PutOptions{Sphere: "perso", Filename: "b.pdf", Title: "Bail"})
+	st.SetClass(a.ID, "h", "3.2", "alain")
+	tr := New(st, "perso")
+	if p, ok := tr.PlanPath("h", a.ID); !ok || p != "plans/h/3 Health/3.2 Insurance/Assura.pdf" {
+		t.Errorf("classified: %q %v", p, ok)
+	}
+	if p, ok := tr.PlanPath("h", b.ID); !ok || p != "plans/h/_unclassified/Bail.pdf" {
+		t.Errorf("unclassified: %q %v", p, ok)
+	}
+	if fi, err := tr.Stat("plans/h/3 Health/3.2 Insurance/Assura.pdf"); err != nil || fi.IsDir() {
+		t.Errorf("the path must exist in the view: %v", err)
+	}
+}
+
+func TestDecomposedNamesResolve(t *testing.T) {
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}}
+	st, _ := store.Open(cfg, nil, "test")
+	defer st.Close()
+	st.Init()
+	st.Plans().Save([]byte("id: h\ntitle: Household\nsphere: perso\nnodes:\n  - notation: \"1\"\n    label: Identité\n"), false)
+	a, _ := st.Put(strings.NewReader("x"), store.PutOptions{Sphere: "perso", Filename: "l.pdf", Title: "Livret Clément"})
+	st.SetClass(a.ID, "h", "1", "alain")
+	tr := New(st, "perso")
+	nfd := "plans/h/1 Identité/Livret Clément.pdf" // as macOS sends it
+	if fi, err := tr.Stat(nfd); err != nil || fi.IsDir() {
+		t.Fatalf("decomposed path: %v", err)
+	}
+	if f, _, err := tr.Open(nfd); err != nil {
+		t.Fatal(err)
+	} else {
+		f.Close()
+	}
+}

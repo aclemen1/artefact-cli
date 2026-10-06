@@ -268,15 +268,24 @@ func Locate(cfg *config.Config, st *store.Store, id string) (path, from string, 
 		return "", "", err
 	}
 	defer rc.Close()
-	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	// The copy is read-only: changes there would never reach the artefact.
+	tmp := p + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return "", "", err
 	}
 	if _, err := io.Copy(f, rc); err != nil {
 		f.Close()
+		os.Remove(tmp)
 		return "", "", err
 	}
-	return p, "cache", f.Close()
+	if err := f.Close(); err != nil {
+		return "", "", err
+	}
+	if err := os.Chmod(tmp, 0o400); err != nil {
+		return "", "", err
+	}
+	return p, "cache", os.Rename(tmp, p)
 }
 
 func init() {

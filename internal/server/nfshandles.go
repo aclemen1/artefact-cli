@@ -2,6 +2,7 @@ package server
 
 import (
 	"crypto/sha256"
+	"golang.org/x/text/unicode/norm"
 	"path"
 	"strings"
 	"sync"
@@ -29,7 +30,7 @@ func newStableHandles(fs billy.Filesystem) nfs.Handler {
 }
 
 func handleOf(p []string) [16]byte {
-	sum := sha256.Sum256([]byte(strings.Join(p, "/")))
+	sum := sha256.Sum256([]byte(norm.NFC.String(strings.Join(p, "/")))) // as the view compares names
 	var h [16]byte
 	copy(h[:], sum[:16])
 	return h

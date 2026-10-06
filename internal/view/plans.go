@@ -1,6 +1,7 @@
 package view
 
 import (
+	"golang.org/x/text/unicode/norm"
 	"io/fs"
 	"path"
 	"sort"
@@ -104,7 +105,7 @@ func safeName(s string) string {
 		}
 		return r
 	}, s)
-	s = strings.TrimSpace(s)
+	s = norm.NFC.String(strings.TrimSpace(s))
 	if s == "." || s == ".." {
 		return "_"
 	}
@@ -181,4 +182,37 @@ func (t *Tree) readPlans(parts []string) ([]*Info, error) {
 		out = append(out, &Info{name: k, size: r.Size, mod: parseTime(r.Updated, t.started), ident: "a:" + c.id})
 	}
 	return out, nil
+}
+
+// PlanPath is where the artefact id sits in the plan's tree of the view:
+// plans/<plan>/<notation label>/…/<title><ext>, as the view names it.
+func (t *Tree) PlanPath(plan, id string) (string, bool) {
+	root, _, err := t.plansNode(nil)
+	if err != nil {
+		return "", false
+	}
+	pd := root.children[safeName(plan)]
+	if pd == nil {
+		return "", false
+	}
+	var find func(n *pnode, at []string) []string
+	find = func(n *pnode, at []string) []string {
+		for name, c := range n.children {
+			p := append(append([]string(nil), at...), name)
+			if !c.dir && c.id == id {
+				return p
+			}
+			if c.dir {
+				if r := find(c, p); r != nil {
+					return r
+				}
+			}
+		}
+		return nil
+	}
+	p := find(pd, []string{"plans", safeName(plan)})
+	if p == nil {
+		return "", false
+	}
+	return path.Join(p...), true
 }

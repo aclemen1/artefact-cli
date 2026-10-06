@@ -52,6 +52,7 @@ type planView struct {
 	top    int
 	assign *store.ListItem // nil: browse
 	parent *planView       // the browsing tree an assignment came from
+	focus  string          // artefact to select once the plans are read
 }
 
 type plansMsg struct {
@@ -247,8 +248,12 @@ func (m *model) keyPlans(k tea.KeyPressMsg) tea.Cmd {
 			m.rebuildTree()
 			return m.load()
 		}
+		selected := m.treeItem()
 		m.planView = pv.parent
 		m.rebuildTree()
+		if m.planView == nil && selected != nil {
+			m.selectInList(selected.URI) // back to the list, on the same artefact
+		}
 		return nil
 	case "j", "down":
 		pv.sel = min(pv.sel+1, max(0, len(pv.rows)-1))
@@ -409,4 +414,60 @@ func (m *model) renderPlans() string {
 		lines = append(lines, row)
 	}
 	return block(lines, m.w, m.h-2)
+}
+
+// focusTree opens the classes that lead to the artefact uri, in the first
+// plan of its sphere, and selects it.
+func (m *model) focusTree(uri string) {
+	pv := m.planView
+	if pv == nil {
+		return
+	}
+	var it *store.ListItem
+	for _, x := range m.visible() {
+		if x.URI == uri {
+			x := x
+			it = &x
+			break
+		}
+	}
+	if it == nil {
+		return
+	}
+	for _, d := range pv.data {
+		if d.plan.Sphere != it.Sphere {
+			continue
+		}
+		pv.open[d.plan.ID+":"] = true
+		node := d.members[it.ID]
+		if node == "" {
+			pv.open[d.plan.ID+":"+unclassifiedRow] = true
+		} else {
+			var find func(ns []*classify.Node, at []string) []string
+			find = func(ns []*classify.Node, at []string) []string {
+				for _, n := range ns {
+					p := append(append([]string(nil), at...), n.Notation)
+					if n.Notation == node {
+						return p
+					}
+					if r := find(n.Children, p); r != nil {
+						return r
+					}
+				}
+				return nil
+			}
+			path := find(d.plan.Nodes, nil)
+			for _, n := range path {
+				pv.open[d.plan.ID+":"+n] = true
+			}
+		}
+		break
+	}
+	m.rebuildTree()
+	for i, r := range pv.rows {
+		if r.item != nil && r.item.URI == uri {
+			pv.sel = i
+			return
+		}
+	}
 }

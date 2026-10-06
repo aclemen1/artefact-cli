@@ -317,6 +317,10 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.rebuildTree()
+			if f := m.planView.focus; f != "" {
+				m.planView.focus = ""
+				m.focusTree(f)
+			}
 		}
 		return m, nil
 	case tickMsg:
@@ -528,7 +532,13 @@ func (m *model) keyList(k tea.KeyPressMsg) tea.Cmd {
 			m.classFilter, m.sel = treeRow{}, 0
 			return m.load()
 		}
-		return m.openPlans(nil)
+		focus := ""
+		if it := m.current(); it != nil {
+			focus = it.URI
+		}
+		cmd := m.openPlans(nil)
+		m.planView.focus = focus
+		return cmd
 	case "c":
 		if it := m.current(); it != nil {
 			cp := *it
@@ -554,6 +564,10 @@ func (m *model) keyList(k tea.KeyPressMsg) tea.Cmd {
 	case "o":
 		if it := m.current(); it != nil {
 			return m.open(it.URI, it.Mime)
+		}
+	case "f":
+		if it := m.current(); it != nil {
+			return m.showInFileManager(*it)
 		}
 	}
 	return nil
@@ -581,6 +595,10 @@ func (m *model) keyDetail(k tea.KeyPressMsg) tea.Cmd {
 		m.scroll = max(0, m.scroll-1)
 	case "o":
 		return m.open(id, m.detail.Card.Mime)
+	case "f":
+		if r, err := m.st.Resolve(id); err == nil {
+			return m.showInFileManager(store.ListItem{Row: r.Row, Sphere: r.Sphere, URI: id})
+		}
 	case "e":
 		return m.editContent(m.detail.Card)
 	case "E":
@@ -747,13 +765,14 @@ func (m *model) open(id string, mime string) tea.Cmd {
 }
 
 func (m *model) openPath(p, mime, from string) tea.Cmd {
+	_ = os.Chmod(p, 0o400) // what o opens is read, by its owner only; e edits
 	if readsAsText(mime, p) {
-		cmd := exec.Command("sh", "-c", editorCommand()+` "$1"`, "sh", p)
+		cmd := exec.Command("sh", "-c", readOnlyEditor(editorCommand())+` "$1"`, "sh", p)
 		return tea.ExecProcess(cmd, func(err error) tea.Msg {
 			if err != nil {
 				return doneMsg{err: err}
 			}
-			return doneMsg{status: "read in the editor, from the " + from + " (changes are not saved to the artefact)"}
+			return doneMsg{status: "read in the editor, read-only, from the " + from + " (e edits the content)"}
 		})
 	}
 	return func() tea.Msg {
@@ -778,6 +797,25 @@ func readsAsText(mime, path string) bool {
 		return true
 	}
 	return false
+}
+
+// readOnlyEditor adds the read-only option of the editors that have one.
+func readOnlyEditor(cmd string) string {
+	fields := strings.Fields(cmd)
+	if len(fields) == 0 {
+		return cmd
+	}
+	switch filepath.Base(fields[0]) {
+	case "vim", "nvim", "vi", "gvim", "mvim", "view":
+		return cmd + " -M"
+	case "nano":
+		return cmd + " -v"
+	case "micro":
+		return cmd + " -readonly true"
+	case "emacs", "emacsclient":
+		return cmd + ` --eval "(setq-default buffer-read-only t)"`
+	}
+	return cmd
 }
 
 func editorCommand() string {
@@ -1161,11 +1199,11 @@ func (m *model) footer() string {
 	case m.prompt != promptNone:
 		help = m.input.View()
 	case m.planView != nil && m.mode != modeDetail && m.planView.assign == nil:
-		help = helpLine("space", "open/close", "enter", "list class/detail", "o", "open", "e/E", "edit content/card", "c", "classify", "/", "search", "t/T", "sort", "s", "sphere", "esc", "back", "?", "keys", "q", "quit")
+		help = helpLine("space", "open/close", "enter", "list class/detail", "o", "open", "f", "finder", "e/E", "edit content/card", "c", "classify", "/", "search", "t/T", "sort", "s", "sphere", "esc", "back", "?", "keys", "q", "quit")
 	case m.mode == modeDetail:
-		help = helpLine("o", "open", "e", "edit content", "E", "edit card", "a", "archive", "S", "seal", "x", "erase", "esc", "back", "?", "keys", "q", "quit")
+		help = helpLine("o", "open", "f", "finder", "e", "edit content", "E", "edit card", "a", "archive", "S", "seal", "x", "erase", "esc", "back", "?", "keys", "q", "quit")
 	default:
-		help = helpLine("enter", "detail", "o", "open", "e/E", "edit content/card", "C", "plans", "c", "classify", "/", "search", "t/T", "sort", "esc", "back", "?", "keys", "q", "quit")
+		help = helpLine("enter", "detail", "o", "open", "f", "finder", "e/E", "edit content/card", "C", "plans", "c", "classify", "/", "search", "t/T", "sort", "esc", "back", "?", "keys", "q", "quit")
 	}
 	status := ""
 	if m.status != "" {
@@ -1207,6 +1245,7 @@ func (m *model) legendLines() []string {
 		{"List", [][2]string{
 			{"j k  ↑ ↓", "move"}, {"g  G", "top, end"}, {"ctrl+d  ctrl+u", "page down, up"},
 			{"enter  l", "detail of the artefact"},
+			{"f", "show the file in the Finder (or the Linux file manager), selected: in the mounted view (in the plans tree, at its place in the plan: plans/<plan>/…), else the local copy"},
 			{"o", "open: a text file in $EDITOR, any other in its application; a sealed one after yes, decrypted into a temporary file deleted on quit"},
 			{"/", "search: the words filter while typing (accents ignored); enter searches titles, cards and texts, by words and by meaning"},
 			{"", `  "phrase"  -word  a OR b  x AROUND(5) y  title: file: text: card:`},
@@ -1232,6 +1271,7 @@ func (m *model) legendLines() []string {
 		}},
 		{"Detail", [][2]string{
 			{"o", "open, as in the list"},
+			{"f", "show the file in the Finder, as in the list"},
 			{"E", "edit the card in $EDITOR: title, date, file name, type, dc, x"},
 			{"c", "classify: pick its class in the plan"},
 			{"e", "edit the content: text in $EDITOR, other files in their application; a changed copy is saved as the next version (the earlier ones are kept)"},
@@ -1591,4 +1631,14 @@ func (m *model) meaningApplies(q, sphere string) bool {
 		}
 	}
 	return false
+}
+
+// selectInList puts the list's selection on the artefact uri, when shown.
+func (m *model) selectInList(uri string) {
+	for i, it := range m.visible() {
+		if it.URI == uri {
+			m.sel = i
+			return
+		}
+	}
 }

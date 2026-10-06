@@ -4,6 +4,7 @@
 package view
 
 import (
+	"golang.org/x/text/unicode/norm"
 	"hash/fnv"
 	"io/fs"
 	"os"
@@ -119,8 +120,10 @@ func fileInfo(name, real string) (*Info, error) {
 	return &Info{name: name, size: fi.Size(), mod: fi.ModTime(), real: real}, nil
 }
 
+// clean splits a path of the view. Names are compared composed (NFC):
+// macOS sends them decomposed (NFD), "é" as "e" and a combining accent.
 func clean(p string) []string {
-	p = path.Clean("/" + strings.ReplaceAll(p, "\\", "/"))
+	p = path.Clean("/" + strings.ReplaceAll(norm.NFC.String(p), "\\", "/"))
 	if p == "/" {
 		return nil
 	}

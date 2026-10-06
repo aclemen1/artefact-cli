@@ -376,6 +376,13 @@ backends:
 - A clear artefact travels in clear: a backend can read it. Sealing is the
   way to keep a file from a backend.
 
+A Drive backend may name its Google account (`backends.<name>.account`).
+`backend reconnect` asks Google which account the consent authorized
+(`about.user`, allowed by the scope `drive.file`) and drops the token when it
+is another one; every sync checks it again before copying anything. A sphere
+never reaches a Drive of the wrong account, even after a consent given in a
+browser logged into it.
+
 ## 7. Replication
 
 ```yaml
@@ -704,6 +711,9 @@ CLI, within the spheres given.
 
 - The list shows the last 6 characters of each id (the first ones are a
   timestamp shared by artefacts deposited together); the detail shows it whole.
+- `/` then enter searches in two steps: by words, shown at once, then by
+  meaning when a sphere has its index; a spinner in the status line names the
+  step that runs.
 - `t` cycles the sort (deposited, date, updated, title, size; relevance after
   a search) and `T` reverses it.
 - The sort, the sphere and the classes open in the plans tree are kept in

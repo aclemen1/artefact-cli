@@ -58,6 +58,9 @@ type Backend struct {
 	Remote  string `yaml:"remote" json:"remote"`                       // e.g. gdrive-perso:artefact
 	Sphere  string `yaml:"sphere" json:"sphere"`                       // the only sphere it may hold
 	Trusted *bool  `yaml:"trusted,omitempty" json:"trusted,omitempty"` // default true; false: its copies do not count
+	// Account is the Google account a Drive remote must be authorized for;
+	// reconnect and every sync check it, and nothing is copied elsewhere.
+	Account string `yaml:"account,omitempty" json:"account,omitempty"`
 }
 
 func (b Backend) IsTrusted() bool { return b.Trusted == nil || *b.Trusted }

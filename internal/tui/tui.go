@@ -96,6 +96,9 @@ type model struct {
 	prefsFile    string            // where the preferences are kept; "" keeps none (tests)
 	saved        prefs             // the preferences as last written
 	startInPlans bool              // the last session ended in the plans tree
+	searching    string            // the phase of the search that runs: words, meaning; "" when none
+	searchSeq    int               // the search whose results are awaited
+	spin         int               // the spinner's frame
 	versions     map[string]int64  // index versions last seen, by sphere
 	signatures   map[string]string // artefact count and last card change, by sphere
 	stale        bool              // another process changed the store; reload when free
@@ -141,7 +144,12 @@ type (
 		items  []store.ListItem
 		scores map[string]float64
 		note   string
+		seq    int
+		phase  string  // words, then meaning
+		next   tea.Cmd // the search by meaning, after the words
+		err    error
 	}
+	spinMsg   struct{}
 	tickMsg   struct{}
 	copiesMsg struct {
 		states   map[string]store.CopyState
@@ -332,10 +340,40 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.progress = msg.progress
 		return m, nil
 	case searchMsg:
+		if msg.seq != m.searchSeq {
+			return m, nil // a newer search runs
+		}
+		selected := ""
+		if it := m.current(); it != nil && msg.phase == "meaning" {
+			selected = it.URI
+		}
 		m.all, m.searched, m.sel, m.scores = msg.items, true, 0, msg.scores
-		m.setStatus(msg.note, false)
 		m.sortAll()
+		if selected != "" {
+			for i, it := range m.visible() {
+				if it.URI == selected {
+					m.sel = i
+				}
+			}
+		}
+		if msg.err != nil {
+			m.searching = ""
+			m.setStatus(msg.err.Error(), true)
+			return m, nil
+		}
+		m.setStatus(msg.note, false)
+		if msg.phase == "words" && msg.next != nil {
+			m.searching = "meaning"
+			return m, tea.Batch(m.refreshCopies(), msg.next)
+		}
+		m.searching = ""
 		return m, m.refreshCopies()
+	case spinMsg:
+		if m.searching == "" {
+			return m, nil
+		}
+		m.spin++
+		return m, spin()
 	case detailMsg:
 		if msg.err != nil {
 			m.setStatus(msg.err.Error(), true)
@@ -598,30 +636,7 @@ func (m *model) keyPrompt(k tea.KeyPressMsg) tea.Cmd {
 				if m.archived {
 					state = "archived"
 				}
-				return func() tea.Msg {
-					res, err := m.st.Find(val, store.FindOptions{Sphere: sphere, Limit: 500, State: state})
-					if err != nil {
-						return listMsg{err: err}
-					}
-					hits := res.Hits
-					items := make([]store.ListItem, len(hits))
-					scores := map[string]float64{}
-					for i, h := range hits {
-						items[i] = h.ListItem
-						scores[h.URI] = h.Score
-					}
-					note := fmt.Sprintf("%d found", len(hits))
-					if res.Semantic {
-						note += " by words and meaning"
-					}
-					if res.Corrected != "" {
-						note += " · searched for: " + res.Corrected
-					}
-					for _, n := range res.Notes {
-						note += " · " + n
-					}
-					return searchMsg{items, scores, note}
-				}
+				return m.startSearch(val, sphere, state)
 			}
 			return m.load()
 		case promptRevise:
@@ -1152,6 +1167,14 @@ func (m *model) footer() string {
 		}
 		status = st.Render(m.status)
 	}
+	if m.searching != "" {
+		phase := "searching by words…"
+		if m.searching == "meaning" {
+			phase = "searching by meaning…"
+		}
+		frame := spinFrames[m.spin%len(spinFrames)]
+		status = sWarn.Render(frame+" "+phase) + "  " + status
+	}
 	return pad(status, m.w) + "\n" + pad(help, m.w)
 }
 
@@ -1500,4 +1523,64 @@ func (m *model) onVersions(v versionsMsg) tea.Cmd {
 		cmds = append(cmds, m.loadDetail(m.detail.URI))
 	}
 	return tea.Batch(cmds...)
+}
+
+var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+func spin() tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg { return spinMsg{} })
+}
+
+// startSearch searches by words first, which answers at once, then by
+// meaning when a sphere has its index; the status line shows the phase.
+func (m *model) startSearch(q, sphere, state string) tea.Cmd {
+	m.searchSeq++
+	seq := m.searchSeq
+	m.searching = "words"
+	m.status = ""
+	off := false
+	var run func(phase string, semantic *bool) tea.Msg
+	run = func(phase string, semantic *bool) tea.Msg {
+		res, err := m.st.Find(q, store.FindOptions{Sphere: sphere, Limit: 500, State: state, Semantic: semantic})
+		if err != nil {
+			return searchMsg{seq: seq, phase: phase, err: err}
+		}
+		items := make([]store.ListItem, len(res.Hits))
+		scores := map[string]float64{}
+		for i, h := range res.Hits {
+			items[i] = h.ListItem
+			scores[h.URI] = h.Score
+		}
+		note := fmt.Sprintf("%d found by words", len(items))
+		if res.Semantic {
+			note = fmt.Sprintf("%d found by words and meaning", len(items))
+		}
+		if res.Corrected != "" {
+			note += " · searched for: " + res.Corrected
+		}
+		for _, n := range res.Notes {
+			note += " · " + n
+		}
+		msg := searchMsg{items: items, scores: scores, note: note, seq: seq, phase: phase}
+		if phase == "words" && m.meaningApplies(q, sphere) {
+			msg.next = func() tea.Msg { return run("meaning", nil) }
+		}
+		return msg
+	}
+	return tea.Batch(func() tea.Msg { return run("words", &off) }, spin())
+}
+
+// meaningApplies tells whether a search by meaning would add anything: the
+// query has words, and a sphere in view has its index by meaning.
+func (m *model) meaningApplies(q, sphere string) bool {
+	parsed, err := query.Parse(q)
+	if err != nil || parsed.Free() == "" {
+		return false
+	}
+	for _, sp := range m.spheres {
+		if (sphere == "" || sp == sphere) && m.st.SemanticReady(sp) {
+			return true
+		}
+	}
+	return false
 }

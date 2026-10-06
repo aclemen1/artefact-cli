@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/aclemen1/artefact-cli/internal/backend"
 	"github.com/aclemen1/artefact-cli/internal/config"
@@ -108,6 +109,15 @@ func init() {
 					return nil, fmt.Errorf("drive set-up: %w", err)
 				}
 				_ = os.Chmod(rc, 0o600)
+				account, err := backend.DriveAccount(context.Background(), name)
+				if err != nil {
+					backend.DropToken(name)
+					return nil, fmt.Errorf("cannot tell which account was authorized, so the token is dropped: %w", err)
+				}
+				if b.Account != "" && !strings.EqualFold(account, b.Account) {
+					backend.DropToken(name)
+					return nil, spec.UserError("the consent was given as %s, but %s must use %s; the token is dropped and nothing is copied. Run it again and pick %s (a private browser window avoids the account Google picks by itself): artefact backend reconnect %s", account, name, b.Account, b.Account, name)
+				}
 				// A new client or account sees none of the earlier copies (scope drive.file):
 				// forget them so that the next sync sends everything again.
 				s, err := store.Open(cfg, []string{b.Sphere}, "artefact-cli/"+Version)
@@ -120,7 +130,7 @@ func init() {
 					return nil, err
 				}
 				clientID, _ := backend.ClientID(name)
-				return map[string]any{"backend": name, "client_id": clientID, "copies_forgotten": forgotten,
+				return map[string]any{"backend": name, "account": account, "client_id": clientID, "copies_forgotten": forgotten,
 					"next": "restart serve: launchctl kickstart -k gui/$(id -u)/aero.clement.artefact"}, nil
 			}
 			name, sp := ctx.Str("name"), ctx.Str("sphere")

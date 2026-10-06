@@ -405,3 +405,24 @@ func TestWatchReloadsOnOutsideChangesOnly(t *testing.T) {
 		t.Fatal("an outside card edit must reload the list")
 	}
 }
+
+func TestSearchShowsItsPhase(t *testing.T) {
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}, DefaultSphere: "perso"}
+	st, _ := store.Open(cfg, nil, "test")
+	defer st.Close()
+	st.Init()
+	st.Put(strings.NewReader("quittance de loyer"), store.PutOptions{Filename: "q.txt", Title: "Quittance"})
+	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
+	m.w, m.h = 120, 30
+	drive(t, m, m.Init())
+	press(t, m, "/")
+	typeText(t, m, "quittance")
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.searching != "words" || !strings.Contains(m.footer(), "searching by words") {
+		t.Fatalf("while searching: %q / %q", m.searching, m.footer())
+	}
+	drive(t, m, cmd)
+	if m.searching != "" || len(m.visible()) != 1 || !strings.Contains(m.status, "1 found by words") {
+		t.Fatalf("after: searching %q, %d hits, status %q", m.searching, len(m.visible()), m.status)
+	}
+}

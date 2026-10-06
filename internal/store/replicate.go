@@ -44,6 +44,18 @@ func (s *Store) backendsOf(ctx context.Context, sphere string) ([]*backend.Backe
 	}
 	var out []*backend.Backend
 	for _, name := range pol.Backends {
+		if cfg := s.Cfg.Backends[name]; cfg.Account != "" {
+			// A remote authorized for another account would carry the
+			// sphere elsewhere: check, at every use, before anything is copied.
+			remote, _, _ := strings.Cut(cfg.Remote, ":")
+			got, err := backend.DriveAccount(ctx, remote)
+			if err != nil {
+				return nil, err
+			}
+			if !strings.EqualFold(got, cfg.Account) {
+				return nil, fmt.Errorf("backend %s is authorized as %s, not %s: nothing is copied; artefact backend reconnect %s", name, got, cfg.Account, name)
+			}
+		}
 		if b, ok := s.backends[name]; ok {
 			out = append(out, b)
 			continue

@@ -5,9 +5,12 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/oauth2"
 	"io"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -170,3 +173,45 @@ func Remotes() []string { return config.FileSections() }
 
 // ClientID returns the OAuth client id configured for remote name.
 func ClientID(name string) (string, bool) { return config.FileGetValue(name, "client_id") }
+
+// DriveAccount asks Google which account the Drive remote name is
+// authorized for, with its own client and token (scope drive.file allows it).
+func DriveAccount(ctx context.Context, name string) (string, error) {
+	id, _ := config.FileGetValue(name, "client_id")
+	secret, _ := config.FileGetValue(name, "client_secret")
+	raw, _ := config.FileGetValue(name, "token")
+	if raw == "" {
+		return "", fmt.Errorf("%s has no token: artefact backend reconnect %s", name, name)
+	}
+	if id == "" {
+		return "", fmt.Errorf("%s uses rclone's shared client; give it your own: artefact backend reconnect %s --client-id … --client-secret …", name, name)
+	}
+	var tok oauth2.Token
+	if err := json.Unmarshal([]byte(raw), &tok); err != nil {
+		return "", fmt.Errorf("%s: unreadable token: %w", name, err)
+	}
+	conf := &oauth2.Config{ClientID: id, ClientSecret: secret, Endpoint: oauth2.Endpoint{
+		AuthURL: "https://accounts.google.com/o/oauth2/auth", TokenURL: "https://oauth2.googleapis.com/token"}}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)", nil)
+	resp, err := conf.Client(ctx, &tok).Do(req)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", name, err)
+	}
+	defer resp.Body.Close()
+	var about struct {
+		User struct {
+			EmailAddress string `json:"emailAddress"`
+		} `json:"user"`
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("%s: Drive answers %s", name, resp.Status)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&about); err != nil || about.User.EmailAddress == "" {
+		return "", fmt.Errorf("%s: Drive did not name the account", name)
+	}
+	return about.User.EmailAddress, nil
+}
+
+// DropToken removes the token of remote name: nothing reaches it until a
+// new consent.
+func DropToken(name string) { config.FileDeleteKey(name, "token"); config.SaveConfig() }

@@ -426,3 +426,62 @@ func TestSearchShowsItsPhase(t *testing.T) {
 		t.Fatalf("after: searching %q, %d hits, status %q", m.searching, len(m.visible()), m.status)
 	}
 }
+
+func TestEscGoesBackQQuits(t *testing.T) {
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}, DefaultSphere: "perso"}
+	st, _ := store.Open(cfg, nil, "test")
+	defer st.Close()
+	st.Init()
+	st.Plans().Save([]byte("id: h\ntitle: Household\nsphere: perso\nnodes:\n  - notation: \"3\"\n    label: Health\n"), false)
+	st.Put(strings.NewReader("a"), store.PutOptions{Filename: "a.pdf", Title: "Assura"})
+	fresh := func() *model {
+		m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
+		m.w, m.h = 120, 30
+		drive(t, m, m.load()) // Init would wait for a 3 s tick
+		return m
+	}
+	quits := func(m *model, key string) bool {
+		var k tea.KeyPressMsg
+		if key == "esc" {
+			k = tea.KeyPressMsg{Code: tea.KeyEscape}
+		} else {
+			k = tea.KeyPressMsg{Code: []rune(key)[0], Text: key}
+		}
+		_, cmd := m.Update(k)
+		if cmd == nil {
+			return false
+		}
+		_, ok := cmd().(tea.QuitMsg) // a batch is not run: q answers tea.Quit itself
+		return ok
+	}
+	views := map[string]func(*model){
+		"list":   func(m *model) {},
+		"detail": func(m *model) { press(t, m, "enter") },
+		"plans":  func(m *model) { press(t, m, "C") },
+		"assign": func(m *model) { press(t, m, "c") },
+		"keys":   func(m *model) { press(t, m, "?") },
+	}
+	for name, open := range views {
+		m := fresh()
+		open(m)
+		if quits(m, "esc") {
+			t.Errorf("esc quits from %s", name)
+		}
+		m = fresh()
+		open(m)
+		if !quits(m, "q") {
+			t.Errorf("q does not quit from %s", name)
+		}
+	}
+	m := fresh()
+	press(t, m, "/")
+	if quits(m, "q") || !strings.Contains(m.input.Value(), "q") {
+		t.Error("in a field, q must be typed")
+	}
+	m = fresh()
+	press(t, m, "enter")
+	press(t, m, "esc")
+	if m.mode != modeList {
+		t.Error("esc from the detail must come back to the list")
+	}
+}

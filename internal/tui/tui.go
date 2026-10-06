@@ -419,11 +419,15 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		if m.prompt != promptNone {
-			return m, m.keyPrompt(msg)
+			return m, m.keyPrompt(msg) // q is typed there
+		}
+		// Every TUI of the ecosystem: q quits from any view, esc goes back.
+		if msg.String() == "q" {
+			return m, tea.Quit
 		}
 		if m.legend {
 			switch msg.String() {
-			case "?", "esc", "q":
+			case "?", "esc":
 				m.legend = false
 			case "j", "down", "J":
 				m.legendAt++
@@ -461,8 +465,12 @@ func (m *model) move(d int) {
 func (m *model) keyList(k tea.KeyPressMsg) tea.Cmd {
 	m.status = ""
 	switch k.String() {
-	case "q":
-		return tea.Quit
+	case "esc":
+		// Back from a search or a class to the whole list.
+		if m.filter != "" || m.searched || m.classFilter.plan != "" {
+			m.filter, m.searched, m.classFilter, m.sel = "", false, treeRow{}, 0
+			return m.load()
+		}
 	case "j", "down":
 		m.move(1)
 	case "k", "up":
@@ -554,14 +562,14 @@ func (m *model) keyList(k tea.KeyPressMsg) tea.Cmd {
 func (m *model) keyDetail(k tea.KeyPressMsg) tea.Cmd {
 	m.status = ""
 	if m.detail == nil {
-		if s := k.String(); s == "esc" || s == "q" || s == "h" || s == "left" {
+		if s := k.String(); s == "esc" || s == "h" || s == "left" {
 			m.mode = modeList
 		}
 		return nil
 	}
 	id := m.detail.URI
 	switch k.String() {
-	case "q", "esc", "h", "left", "backspace":
+	case "esc", "h", "left", "backspace":
 		m.mode, m.detail = modeList, nil
 		if m.planView != nil {
 			return tea.Batch(m.load(), m.loadPlans())
@@ -898,7 +906,7 @@ func (m *model) render() string {
 		return m.renderPlans() + "\n" + m.footer()
 	}
 	if m.legend {
-		return block(m.legendLines()[min(m.legendAt, max(0, len(m.legendLines())-1)):], m.w, m.h-1) + "\n" + pad(helpLine("?", "close", "j/k", "scroll"), m.w)
+		return block(m.legendLines()[min(m.legendAt, max(0, len(m.legendLines())-1)):], m.w, m.h-1) + "\n" + pad(helpLine("?/esc", "close", "j/k", "scroll", "q", "quit"), m.w)
 	}
 	if m.mode == modeDetail {
 		body = m.renderDetail()
@@ -1153,11 +1161,11 @@ func (m *model) footer() string {
 	case m.prompt != promptNone:
 		help = m.input.View()
 	case m.planView != nil && m.mode != modeDetail && m.planView.assign == nil:
-		help = helpLine("space", "open/close", "enter", "list class/detail", "o", "open", "e/E", "edit content/card", "c", "classify", "/", "search", "t/T", "sort", "s", "sphere", "esc", "back", "?", "keys")
+		help = helpLine("space", "open/close", "enter", "list class/detail", "o", "open", "e/E", "edit content/card", "c", "classify", "/", "search", "t/T", "sort", "s", "sphere", "esc", "back", "?", "keys", "q", "quit")
 	case m.mode == modeDetail:
-		help = helpLine("o", "open", "e", "edit content", "E", "edit card", "a", "archive", "S", "seal", "x", "erase", "esc", "back", "?", "keys")
+		help = helpLine("o", "open", "e", "edit content", "E", "edit card", "a", "archive", "S", "seal", "x", "erase", "esc", "back", "?", "keys", "q", "quit")
 	default:
-		help = helpLine("enter", "detail", "o", "open", "e/E", "edit content/card", "C", "plans", "c", "classify", "/", "search", "t/T", "sort", "?", "keys", "q", "quit")
+		help = helpLine("enter", "detail", "o", "open", "e/E", "edit content/card", "C", "plans", "c", "classify", "/", "search", "t/T", "sort", "esc", "back", "?", "keys", "q", "quit")
 	}
 	status := ""
 	if m.status != "" {
@@ -1233,7 +1241,7 @@ func (m *model) legendLines() []string {
 			{"X", "erase an artefact a tool still holds (your override)"},
 			{"j k", "scroll"}, {"esc  h", "back to the list"},
 		}},
-		{"Everywhere", [][2]string{{"?", "these keys"}, {"q  ctrl+c", "quit"}}},
+		{"Everywhere", [][2]string{{"?", "these keys"}, {"esc", "back to the previous view; never quits"}, {"q  ctrl+c", "quit, from any view (in a field, q is typed)"}}},
 	} {
 		section(theme.title)
 		for _, kv := range theme.keys {

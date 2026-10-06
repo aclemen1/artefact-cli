@@ -250,13 +250,6 @@ func (m *model) keyPlans(k tea.KeyPressMsg) tea.Cmd {
 		m.planView = pv.parent
 		m.rebuildTree()
 		return nil
-	case "q":
-		if pv.assign != nil {
-			m.planView = pv.parent
-			m.rebuildTree()
-			return nil
-		}
-		return tea.Quit
 	case "j", "down":
 		pv.sel = min(pv.sel+1, max(0, len(pv.rows)-1))
 	case "k", "up":

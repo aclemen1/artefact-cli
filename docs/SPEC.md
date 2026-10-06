@@ -709,6 +709,9 @@ CLI, within the spheres given.
 | plans (`C`) | the plans as a foldable tree; a class opens on its sub-classes, then its artefacts; counts include sub-classes | `space`/`l` open, `h` close or go up, `enter` lists a class or shows an artefact, `o` open, `t`/`T` sort, `esc` back |
 | detail | card, Dublin Core, extensions, versions, holders, events (newest first) | `o` open, `e` edit the content, `E` edit the card in `$EDITOR`, `S` seal (type `yes`), `x` erase, `X` erase a held artefact, `j`/`k` scroll, `esc` back |
 
+- As in every TUI of the ecosystem, `esc` goes back to the previous view
+  (from a search or a class to the whole list) and never quits; `q` quits
+  from any view, except in a field, where it is typed.
 - The list shows the last 6 characters of each id (the first ones are a
   timestamp shared by artefacts deposited together); the detail shows it whole.
 - `/` then enter searches in two steps: by words, shown at once, then by

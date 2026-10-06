@@ -3,10 +3,12 @@
 package index
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"unicode"
 
 	_ "modernc.org/sqlite"
@@ -101,7 +103,11 @@ type Holder struct {
 	At  string `json:"at" yaml:"at"`
 }
 
-type Index struct{ db *sql.DB }
+type Index struct {
+	db    *sql.DB
+	watch *sql.Conn // one connection: PRAGMA data_version counts per connection
+	mu    sync.Mutex
+}
 
 var ErrNotFound = errors.New("index: not found")
 
@@ -140,7 +146,31 @@ func Open(path string) (*Index, error) {
 	return &Index{db: db}, nil
 }
 
-func (x *Index) Close() error { return x.db.Close() }
+func (x *Index) Close() error {
+	x.mu.Lock()
+	if x.watch != nil {
+		x.watch.Close()
+	}
+	x.mu.Unlock()
+	return x.db.Close()
+}
+
+// DataVersion changes when another connection, or another process, has
+// written to the index since the last call: a nearly free way to notice.
+func (x *Index) DataVersion() (int64, error) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if x.watch == nil {
+		c, err := x.db.Conn(context.Background())
+		if err != nil {
+			return 0, err
+		}
+		x.watch = c
+	}
+	var v int64
+	err := x.watch.QueryRowContext(context.Background(), `PRAGMA data_version`).Scan(&v)
+	return v, err
+}
 
 // Reset empties every table, before a rebuild.
 func (x *Index) Reset() error {
@@ -773,4 +803,13 @@ func (x *Index) Paths() (map[string]string, error) {
 		out[p] = id
 	}
 	return out, rows.Err()
+}
+
+// Signature changes when an artefact is added, removed, or its card changes
+// (a class, a tag, a title), but not when only copies are recorded.
+func (x *Index) Signature() (string, error) {
+	var n int64
+	var last sql.NullString
+	err := x.db.QueryRow(`SELECT count(*), max(updated) FROM artefacts`).Scan(&n, &last)
+	return fmt.Sprintf("%d %s", n, last.String), err
 }

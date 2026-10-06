@@ -1038,3 +1038,35 @@ func (s *Store) Archive(ref string, archived bool, reason string) (*Card, error)
 	}
 	return c, s.saveCard(r, c, at)
 }
+
+// DataVersions gives, per granted sphere, a number that changes when the
+// sphere's index was written by someone else since the last call.
+func (s *Store) DataVersions() map[string]int64 {
+	out := map[string]int64{}
+	for _, sp := range s.Spheres {
+		x, err := s.index(sp)
+		if err != nil {
+			continue
+		}
+		if v, err := x.DataVersion(); err == nil {
+			out[sp] = v
+		}
+	}
+	return out
+}
+
+// Signatures gives, per granted sphere, what changes when artefacts or
+// cards change; copies being recorded leave it as it is.
+func (s *Store) Signatures() map[string]string {
+	out := map[string]string{}
+	for _, sp := range s.Spheres {
+		x, err := s.index(sp)
+		if err != nil {
+			continue
+		}
+		if v, err := x.Signature(); err == nil {
+			out[sp] = v
+		}
+	}
+	return out
+}

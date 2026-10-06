@@ -87,17 +87,20 @@ type model struct {
 	progress     []store.SyncProgress
 	legend       bool
 	legendAt     int
-	reveal       *revealReq       // sealed artefact waiting for the confirmation to open it
-	edits        map[string]*edit // content being edited in an application, by artefact
-	toSave       *edit            // edited copy waiting for the confirmation to save it
-	editCard     *store.Card      // card open in the editor
-	planView     *planView        // the plans tree, when shown
-	treeOpen     map[string]bool  // classes open in the plans tree, kept between sessions
-	prefsFile    string           // where the preferences are kept; "" keeps none (tests)
-	saved        prefs            // the preferences as last written
-	startInPlans bool             // the last session ended in the plans tree
-	classFilter  treeRow          // list filtered on a class (plan "" for none)
-	revealed     []string         // decrypted temporary files, deleted on quit
+	reveal       *revealReq        // sealed artefact waiting for the confirmation to open it
+	edits        map[string]*edit  // content being edited in an application, by artefact
+	toSave       *edit             // edited copy waiting for the confirmation to save it
+	editCard     *store.Card       // card open in the editor
+	planView     *planView         // the plans tree, when shown
+	treeOpen     map[string]bool   // classes open in the plans tree, kept between sessions
+	prefsFile    string            // where the preferences are kept; "" keeps none (tests)
+	saved        prefs             // the preferences as last written
+	startInPlans bool              // the last session ended in the plans tree
+	versions     map[string]int64  // index versions last seen, by sphere
+	signatures   map[string]string // artefact count and last card change, by sphere
+	stale        bool              // another process changed the store; reload when free
+	classFilter  treeRow           // list filtered on a class (plan "" for none)
+	revealed     []string          // decrypted temporary files, deleted on quit
 
 	w, h      int
 	status    string
@@ -278,9 +281,21 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus(msg.err.Error(), true)
 			return m, nil
 		}
+		selected := ""
+		if it := m.current(); it != nil && m.planView == nil {
+			selected = it.URI
+		}
 		m.all, m.searched = msg.items, false
 		m.sortAll()
 		m.sel = min(m.sel, max(0, len(m.visible())-1))
+		if selected != "" {
+			for i, it := range m.visible() {
+				if it.URI == selected {
+					m.sel = i
+					break
+				}
+			}
+		}
 		return m, m.refreshCopies()
 	case plansMsg:
 		if m.planView != nil {
@@ -297,7 +312,9 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tickMsg:
-		return m, tea.Batch(m.refreshCopies(), m.checkEdits(), tick())
+		return m, tea.Batch(m.refreshCopies(), m.checkEdits(), m.watchStore(), tick())
+	case versionsMsg:
+		return m, m.onVersions(msg)
 	case editedContentMsg:
 		e := m.edits[msg.id]
 		if e == nil {
@@ -478,7 +495,7 @@ func (m *model) keyList(k tea.KeyPressMsg) tea.Cmd {
 				m.setStatus("cannot read the card", true)
 				return nil
 			}
-			if k.String() == "e" {
+			if k.String() == "E" {
 				return m.edit(st[0].Card)
 			}
 			return m.editContent(st[0].Card)
@@ -519,9 +536,9 @@ func (m *model) keyDetail(k tea.KeyPressMsg) tea.Cmd {
 	case "o":
 		return m.open(id, m.detail.Card.Mime)
 	case "e":
-		return m.edit(m.detail.Card)
-	case "E":
 		return m.editContent(m.detail.Card)
+	case "E":
+		return m.edit(m.detail.Card)
 	case "c":
 		c := m.detail.Card
 		return m.openPlans(&store.ListItem{Row: index.Row{ID: c.ID, Title: c.Title}, Sphere: c.Sphere, URI: m.detail.URI})
@@ -1121,11 +1138,11 @@ func (m *model) footer() string {
 	case m.prompt != promptNone:
 		help = m.input.View()
 	case m.planView != nil && m.mode != modeDetail && m.planView.assign == nil:
-		help = helpLine("space", "open/close", "enter", "list class/detail", "o", "open", "e/E", "edit", "c", "classify", "/", "search", "t/T", "sort", "s", "sphere", "esc", "back", "?", "keys")
+		help = helpLine("space", "open/close", "enter", "list class/detail", "o", "open", "e/E", "edit content/card", "c", "classify", "/", "search", "t/T", "sort", "s", "sphere", "esc", "back", "?", "keys")
 	case m.mode == modeDetail:
-		help = helpLine("o", "open", "E", "edit content", "e", "edit card", "a", "archive", "S", "seal", "x", "erase", "esc", "back", "?", "keys")
+		help = helpLine("o", "open", "e", "edit content", "E", "edit card", "a", "archive", "S", "seal", "x", "erase", "esc", "back", "?", "keys")
 	default:
-		help = helpLine("enter", "detail", "o", "open", "e/E", "edit card/content", "C", "plans", "c", "classify", "/", "search", "t/T", "sort", "?", "keys", "q", "quit")
+		help = helpLine("enter", "detail", "o", "open", "e/E", "edit content/card", "C", "plans", "c", "classify", "/", "search", "t/T", "sort", "?", "keys", "q", "quit")
 	}
 	status := ""
 	if m.status != "" {
@@ -1171,7 +1188,7 @@ func (m *model) legendLines() []string {
 			{"A", "archives: the archived artefacts instead of the active ones"},
 			{"t", "sort: deposited, date, updated, title, size (and relevance after a search), in turn"},
 			{"T", "reverse the sort: ↓ newest, largest, most relevant first, or Z-A; ↑ the other way"},
-			{"e  E", "edit the card, or the content, of the selected artefact"},
+			{"e  E", "edit the content, or the card, of the selected artefact"},
 			{"C", "plans: the classes with their counts; enter lists a class (sub-classes included); C again clears it"},
 			{"c", "classify the selected artefact: pick its class in the plan (your decision, never overwritten)"},
 		}},
@@ -1184,9 +1201,9 @@ func (m *model) legendLines() []string {
 		}},
 		{"Detail", [][2]string{
 			{"o", "open, as in the list"},
-			{"e", "edit the card in $EDITOR: title, date, file name, type, dc, x"},
+			{"E", "edit the card in $EDITOR: title, date, file name, type, dc, x"},
 			{"c", "classify: pick its class in the plan"},
-			{"E", "edit the content: text in $EDITOR, other files in their application; a changed copy is saved as the next version (the earlier ones are kept)"},
+			{"e", "edit the content: text in $EDITOR, other files in their application; a changed copy is saved as the next version (the earlier ones are kept)"},
 			{"a", "archive, or make active again"},
 			{"S", "seal: encrypt, and erase the clear versions everywhere (type yes)"},
 			{"x", "erase: shows the plan, asks for its code"},
@@ -1427,4 +1444,60 @@ func shortID(id string) string {
 		return id
 	}
 	return id[len(id)-6:]
+}
+
+type versionsMsg struct {
+	versions   map[string]int64
+	signatures map[string]string
+}
+
+// watchStore notices what other processes wrote: the index versions cost
+// nearly nothing; only when one moved are the signatures read, and only a
+// changed signature (artefacts or cards, not copies) means news.
+func (m *model) watchStore() tea.Cmd {
+	last := m.signatures
+	return func() tea.Msg {
+		v := m.st.DataVersions()
+		return versionsMsg{versions: v, signatures: last}
+	}
+}
+
+// onVersions reloads what is shown when another process changed the store:
+// the list, the plans tree, the detail. It waits while a question is asked,
+// and does not run a search again: it says that there is news.
+func (m *model) onVersions(v versionsMsg) tea.Cmd {
+	moved := m.versions == nil
+	for sp, n := range v.versions {
+		if old, seen := m.versions[sp]; seen && old != n {
+			moved = true
+		}
+	}
+	m.versions = v.versions
+	if moved {
+		sig := m.st.Signatures()
+		for sp, x := range sig {
+			if old, seen := m.signatures[sp]; seen && old != x {
+				m.stale = true
+			}
+		}
+		m.signatures = sig
+	}
+	if !m.stale || m.prompt != promptNone || m.editCard != nil {
+		return nil
+	}
+	if m.searched {
+		if m.status == "" {
+			m.setStatus("the store changed: r refreshes", false)
+		}
+		return nil
+	}
+	m.stale = false
+	cmds := []tea.Cmd{m.load()}
+	if m.planView != nil {
+		cmds = append(cmds, m.loadPlans())
+	}
+	if m.mode == modeDetail && m.detail != nil {
+		cmds = append(cmds, m.loadDetail(m.detail.URI))
+	}
+	return tea.Batch(cmds...)
 }

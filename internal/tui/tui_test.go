@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -195,7 +196,7 @@ func TestEditContent(t *testing.T) {
 	m.w, m.h = 120, 30
 	drive(t, m, m.Init())
 	press(t, m, "enter")
-	press(t, m, "E")
+	press(t, m, "e")
 	e := m.edits[a.ID]
 	if e == nil {
 		t.Fatalf("no working copy: %q", m.status)
@@ -297,9 +298,9 @@ func TestPlansView(t *testing.T) {
 	if l, _ := st.List("perso", indexFilterClass("h:4")); len(l) != 1 {
 		t.Errorf("Bail not placed in 4: %v (%q)", l, m.status)
 	}
-	press(t, m, "e")
+	press(t, m, "E")
 	if m.editCard == nil {
-		t.Error("e from the list must open the card editor")
+		t.Error("E from the list must open the card editor")
 	}
 }
 
@@ -328,9 +329,9 @@ func TestTreeDoesWhatTheListDoes(t *testing.T) {
 		t.Fatalf("search in the tree: %+v", m.planView)
 	}
 	m.planView.sel = 2
-	press(t, m, "e")
+	press(t, m, "E")
 	if m.editCard == nil || m.editCard.ID != a.ID {
-		t.Fatal("e in the tree must edit the selected artefact's card")
+		t.Fatal("E in the tree must edit the selected artefact's card")
 	}
 	m.editCard = nil
 	press(t, m, "esc") // clears the filter, stays in the tree
@@ -356,5 +357,51 @@ func TestTreeDoesWhatTheListDoes(t *testing.T) {
 	}
 	if l, _ := st.List("perso", indexFilterClass("h:4")); len(l) != 1 {
 		t.Errorf("Assura not placed in 4: %v (%q)", l, m.status)
+	}
+}
+
+func TestWatchReloadsOnOutsideChangesOnly(t *testing.T) {
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}, DefaultSphere: "perso"}
+	st, _ := store.Open(cfg, nil, "test")
+	defer st.Close()
+	st.Init()
+	st.Put(strings.NewReader("a"), store.PutOptions{Filename: "a.pdf", Title: "A"})
+	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
+	m.w, m.h = 120, 30
+	drive(t, m, m.Init())
+	tickOnce := func() tea.Cmd {
+		var cmds []tea.Cmd
+		cmds = append(cmds, m.refreshCopies(), m.checkEdits())
+		drive(t, m, tea.Batch(cmds...))
+		return m.onVersions(m.watchStore()().(versionsMsg))
+	}
+	tickOnce()
+	for i := range 3 {
+		if cmd := tickOnce(); cmd != nil {
+			t.Fatalf("idle tick %d reloads", i)
+		}
+	}
+	// Another process deposits.
+	other, _ := store.Open(cfg, nil, "other")
+	other.Put(strings.NewReader("b"), store.PutOptions{Filename: "b.pdf", Title: "B"})
+	other.Close()
+	cmd := tickOnce()
+	if cmd == nil {
+		t.Fatal("an outside deposit must reload the list")
+	}
+	drive(t, m, cmd)
+	if len(m.visible()) != 2 {
+		t.Fatalf("after reload: %d artefacts", len(m.visible()))
+	}
+	if cmd := tickOnce(); cmd != nil {
+		t.Fatal("the reload itself must not trigger another one")
+	}
+	// Another process edits a card.
+	other, _ = store.Open(cfg, nil, "other")
+	time.Sleep(1100 * time.Millisecond) // card times have a one-second grain
+	other.EditCard(m.visible()[0].URI, []string{"title=Renamed"}, "")
+	other.Close()
+	if cmd := tickOnce(); cmd == nil {
+		t.Fatal("an outside card edit must reload the list")
 	}
 }

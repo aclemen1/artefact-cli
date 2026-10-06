@@ -13,7 +13,6 @@ import (
 	"strings"
 
 	nfs "github.com/willscott/go-nfs"
-	nfshelper "github.com/willscott/go-nfs/helpers"
 	"golang.org/x/net/webdav"
 
 	"github.com/aclemen1/artefact-cli/internal/config"
@@ -106,7 +105,7 @@ func (h *Server) startNFS(errc chan<- error) ([]net.Listener, error) {
 		}
 		ls = append(ls, l)
 		state[sp] = l.Addr().(*net.TCPAddr).Port
-		handler := nfshelper.NewCachingHandler(nfshelper.NewNullAuthHandler(view.Billy{T: t}), 4096)
+		handler := newStableHandles(view.Billy{T: t})
 		go func() { errc <- nfs.Serve(l, handler) }()
 	}
 	b, _ := json.Marshal(state)

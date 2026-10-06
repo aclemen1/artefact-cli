@@ -146,12 +146,15 @@ func (t *Tree) Stat(p string) (*Info, error) {
 	}
 	name := parts[1]
 	if len(parts) == 2 {
-		if r, ok := rows[name]; ok {
-			d := t.dir(r.ID)
+		if r, ok := versionsRow(rows, name); ok {
+			d := t.dir(name)
 			d.ident = "d:a/" + r.ID
 			return d, nil
 		}
-		id := strings.TrimSuffix(name, path.Ext(name))
+		id := name
+		if _, bare := rows[name]; !bare {
+			id = strings.TrimSuffix(name, path.Ext(name))
+		}
 		r, ok := rows[id]
 		if !ok || r.ID+r.Ext != name {
 			return nil, fs.ErrNotExist
@@ -164,7 +167,7 @@ func (t *Tree) Stat(p string) (*Info, error) {
 		return &Info{name: name, size: r.Size, mod: parseTime(r.Updated, t.started), real: vs[len(vs)-1].Path, ident: "a:" + r.ID}, nil
 	}
 	if len(parts) == 3 {
-		r, ok := rows[name]
+		r, ok := versionsRow(rows, name)
 		if !ok {
 			return nil, fs.ErrNotExist
 		}
@@ -203,13 +206,13 @@ func (t *Tree) ReadDir(p string) ([]*Info, error) {
 			if r.Archived != "" {
 				continue // reachable by its path, not listed
 			}
-			d := t.dir(id)
+			d := t.dir(versionsDir(r))
 			d.ident = "d:a/" + id
 			out = append(out, &Info{name: id + r.Ext, size: r.Size, mod: parseTime(r.Updated, t.started), ident: "a:" + id}, d)
 		}
 		return out, nil
 	}
-	r, ok := rows[parts[1]]
+	r, ok := versionsRow(rows, parts[1])
 	if !ok {
 		return nil, fs.ErrNotExist
 	}
@@ -244,4 +247,24 @@ func (t *Tree) Open(p string) (*os.File, *Info, error) {
 	}
 	f, err := os.Open(fi.real)
 	return f, fi, err
+}
+
+// versionsDir names the directory of an artefact's versions: a/<id>/, or
+// a/<id>.versions/ when the artefact has no extension, since a/<id> is then
+// its current file.
+func versionsDir(r index.Row) string {
+	if r.Ext == "" {
+		return r.ID + ".versions"
+	}
+	return r.ID
+}
+
+// versionsRow finds the artefact whose versions directory is name.
+func versionsRow(rows map[string]index.Row, name string) (index.Row, bool) {
+	if id, ok := strings.CutSuffix(name, ".versions"); ok {
+		r, found := rows[id]
+		return r, found && r.Ext == ""
+	}
+	r, found := rows[name]
+	return r, found && r.Ext != ""
 }

@@ -146,3 +146,47 @@ func TestPlansView(t *testing.T) {
 		t.Errorf("content %q", buf)
 	}
 }
+
+func TestNoExtensionKeepsFileAndVersionsApart(t *testing.T) {
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}}
+	st, _ := store.Open(cfg, nil, "test")
+	defer st.Close()
+	st.Init()
+	r, err := st.Put(strings.NewReader("%PDF bordereau"), store.PutOptions{Sphere: "perso", Filename: "Bordereau - PROJET", Mime: "application/pdf"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := New(st, "perso")
+	fi, err := tr.Stat("a/" + r.ID)
+	if err != nil || fi.IsDir() {
+		t.Fatalf("a/<id> must be the current file: %+v %v", fi, err)
+	}
+	if f, _, err := tr.Open("a/" + r.ID); err != nil {
+		t.Fatal(err)
+	} else {
+		b, _ := io.ReadAll(f)
+		f.Close()
+		if string(b) != "%PDF bordereau" {
+			t.Fatalf("content %q", b)
+		}
+	}
+	d, err := tr.Stat("a/" + r.ID + ".versions")
+	if err != nil || !d.IsDir() {
+		t.Fatalf("versions directory: %+v %v", d, err)
+	}
+	vs, err := tr.ReadDir("a/" + r.ID + ".versions")
+	if err != nil || len(vs) != 1 || vs[0].Name() != "v1" {
+		t.Fatalf("versions: %v %v", vs, err)
+	}
+	names := map[string]bool{}
+	list, _ := tr.ReadDir("a")
+	for _, e := range list {
+		if names[e.Name()] {
+			t.Fatalf("a/ lists %s twice", e.Name())
+		}
+		names[e.Name()] = true
+	}
+	if !names[r.ID] || !names[r.ID+".versions"] {
+		t.Fatalf("a/ lists %v", names)
+	}
+}

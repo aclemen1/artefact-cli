@@ -179,6 +179,10 @@ func TestOpenSealedAsksThenCleansUp(t *testing.T) {
 	if err != nil || string(b) != "TOPSECRET" || fi.Mode().Perm() != 0o400 {
 		t.Fatalf("decrypted copy: %q %v %v", b, err, fi.Mode())
 	}
+	// A second opening replaces the read-only copy left by the first.
+	if _, err := m.decrypt(a.URI); err != nil {
+		t.Fatalf("second opening: %v", err)
+	}
 	m.Cleanup()
 	if _, err := os.Stat(p); !os.IsNotExist(err) {
 		t.Error("decrypted copy left after cleanup")

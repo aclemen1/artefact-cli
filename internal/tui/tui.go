@@ -1322,6 +1322,7 @@ func (m *model) decrypt(id string) (string, error) {
 		name = c.ID + c.Ext
 	}
 	p := filepath.Join(dir, filepath.Base(name))
+	os.Remove(p) // an earlier copy is read-only (o opens read-only)
 	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return "", err
@@ -1397,6 +1398,7 @@ func (m *model) editContent(c *store.Card) tea.Cmd {
 		name = c.ID + c.Ext
 	}
 	p := filepath.Join(dir, filepath.Base(name))
+	os.Remove(p) // a copy left read-only would refuse the new content
 	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		m.setStatus(err.Error(), true)

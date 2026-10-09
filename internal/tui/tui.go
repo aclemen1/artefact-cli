@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/aclemen1/artefact-cli/internal/notes"
 	"github.com/aclemen1/tuikit"
 	"io"
 	"os"
@@ -31,6 +32,7 @@ type Locator func(cfg *config.Config, st *store.Store, id string) (string, strin
 
 // Run shows the TUI over a store already scoped to the spheres it may use.
 func Run(cfg *config.Config, st *store.Store, locate Locator, version string) error {
+	tuikit.SetLanguage(tuikit.English) // as the rest of the TUI; dates are still read in French too
 	m := newModel(cfg, st, locate)
 	if exe, err := os.Executable(); err == nil {
 		if real, err := filepath.EvalSymlinks(exe); err == nil {
@@ -125,6 +127,7 @@ type model struct {
 	pendingG     bool              // g pressed: a second g goes to the top
 	target       string            // artefact a prompt acts on (seal)
 	modal        *tuikit.Modal     // the open input, if any: it takes every key
+	noteFor      *store.ListItem   // artefact the open note editor writes to
 	build        string            // version and commit, shown in the header
 	resumed      *resume           // state carried over a reload, applied once the list is read
 	classFilter  treeRow           // list filtered on a class (plan "" for none)
@@ -214,6 +217,10 @@ func (m *model) loadDetail(id string) tea.Cmd {
 		}
 		if err != nil {
 			return detailMsg{err: err}
+		}
+		if notes.Configured(m.cfg) {
+			// A note tool that fails leaves the detail shown without notes.
+			st[0].Notes, _ = notes.Of(m.cfg, st[0].Card.ID, st[0].Card.Sphere)
 		}
 		return detailMsg{st: &st[0]}
 	}
@@ -1016,6 +1023,19 @@ func (m *model) renderDetail() string {
 	for _, hd := range c.Holders {
 		lines = append(lines, sText.Render(fmt.Sprintf("  %s", hd.By))+sMuted.Render(fmt.Sprintf("  %s  %s", hd.Ref, hd.At)))
 	}
+	if notes.Configured(m.cfg) {
+		lines = append(lines, "", sBold.Render(fmt.Sprintf("Notes (%d)", len(d.Notes)))+sMuted.Render("  ·  N adds one"))
+		for _, n := range d.Notes {
+			head := n.ID + "  " + n.Created
+			if n.By != "" {
+				head += "  " + n.By
+			}
+			lines = append(lines, sMuted.Render("  "+head))
+			for _, l := range strings.Split(strings.TrimRight(n.Body, "\n"), "\n") {
+				lines = append(lines, sText.Render("    "+l))
+			}
+		}
+	}
 	lines = append(lines, "", sBold.Render(fmt.Sprintf("Events (%d)", len(d.Events))))
 	for i := len(d.Events) - 1; i >= 0; i-- {
 		e := d.Events[i]
@@ -1158,6 +1178,7 @@ func (m *model) legendLines() []string {
 			{"#", "erase for good: shows the plan, asks for its code"},
 			{"X", "erase an artefact a tool still holds (your override)"},
 			{"c", "deposit a file (new artefact): its path, then its sphere when none is in view"},
+			{"N", "add a note to the artefact (shown in its detail)"},
 		}},
 		{"Plans (2, C)", [][2]string{
 			{"l  →", "open a class: its sub-classes, then its artefacts"},

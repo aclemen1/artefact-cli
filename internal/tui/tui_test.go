@@ -715,3 +715,68 @@ func TestCardForm(t *testing.T) {
 		t.Fatalf("after save: open %v status %q", m.modal.Open(), m.status)
 	}
 }
+
+func TestCardFormTags(t *testing.T) {
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}}
+	st, _ := store.Open(cfg, nil, "test")
+	defer st.Close()
+	st.Init()
+	a, _ := st.Put(strings.NewReader("a"), store.PutOptions{Sphere: "perso", Filename: "a.pdf", Title: "Assura"})
+	b, _ := st.Put(strings.NewReader("b"), store.PutOptions{Sphere: "perso", Filename: "b.pdf", Title: "Bail"})
+	st.Tag(b.URI, []string{"eve"}, nil)
+	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
+	m.w, m.h = 120, 30
+	drive(t, m, m.load())
+	if got := m.tagCompleter("perso")("ev"); len(got) != 1 || got[0].Value != "eve" {
+		t.Fatalf("completion: %+v", got)
+	}
+	m.selectInList(a.URI)
+	press(t, m, "E")
+	for range 4 { // title, date, file name, type
+		press(t, m, "tab")
+	}
+	typeText(t, m, "eve,")
+	typeText(t, m, "jeannette,")
+	press(t, m, "ctrl+s")
+	st2, _, _ := st.Stat([]string{a.URI}, false)
+	if got := strings.Join(st2[0].Card.Tags, ","); got != "eve,jeannette" {
+		t.Fatalf("tags %q (%q)", got, m.status)
+	}
+}
+
+func TestNotes(t *testing.T) {
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fakenote")
+	os.WriteFile(script, []byte(`#!/bin/sh
+d=`+dir+`
+case "$1" in
+add) echo "$2|$3" > "$d/args"; cat > "$d/body" ;;
+ls) if [ -f "$d/body" ]; then printf '{"ok":true,"result":{"items":[{"id":"PN-0009","created":"2026-10-10","body":"%s"}]}}' "$(cat "$d/body")"; else printf '{"ok":true,"result":{"items":[]}}'; fi ;;
+esac
+`), 0o755)
+	cfg.Notes.Add = []string{script, "add", "{ref}", "{sphere}"}
+	cfg.Notes.Ls = []string{script, "ls", "{ref}"}
+	st, _ := store.Open(cfg, nil, "test")
+	defer st.Close()
+	st.Init()
+	a, _ := st.Put(strings.NewReader("a"), store.PutOptions{Sphere: "perso", Filename: "a.pdf", Title: "Assura"})
+	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
+	m.w, m.h = 120, 40
+	drive(t, m, m.load())
+	m.selectInList(a.URI)
+	press(t, m, "N")
+	if !m.modal.Open() {
+		t.Fatal("N must open the note editor")
+	}
+	typeText(t, m, "garantie jusqu'en 2028")
+	press(t, m, "ctrl+s")
+	args, _ := os.ReadFile(filepath.Join(dir, "args"))
+	if strings.TrimSpace(string(args)) != "artefact:"+a.ID+"|perso" {
+		t.Fatalf("notes.add got %q (%q)", args, m.status)
+	}
+	press(t, m, "enter") // detail
+	if s := screen(m); !strings.Contains(s, "Notes (1)") || !strings.Contains(s, "garantie jusqu'en 2028") {
+		t.Fatalf("detail without the note:\n%s", s)
+	}
+}

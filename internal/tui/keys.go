@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"github.com/aclemen1/artefact-cli/internal/notes"
+	"github.com/aclemen1/tuikit"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -34,6 +36,13 @@ func (m *model) itemKey(key string, it store.ListItem, inTree bool) (tea.Cmd, bo
 	case "m":
 		cp := it
 		return m.openPlans(&cp), true
+	case "N":
+		if !notes.Configured(m.cfg) || len(m.cfg.Notes.Add) == 0 {
+			m.setStatus("no notes.add command in the configuration", true)
+			return nil, true
+		}
+		m.noteFor = &it
+		return m.openModal("Note on "+it.Title, tuikit.NewEditor("note", "Note", "")), true
 	case "e", "x", "a":
 		toArchive := it.Archived == ""
 		id := it.URI

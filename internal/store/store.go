@@ -5,6 +5,7 @@ package store
 import (
 	"errors"
 	"fmt"
+	"github.com/aclemen1/artefact-cli/internal/notes"
 	"io"
 	"mime"
 	"net/http"
@@ -712,6 +713,7 @@ type Stat struct {
 	Locations []Location    `json:"locations"`
 	Copies    []Copy        `json:"copies,omitempty"`
 	Events    []Event       `json:"events,omitempty"`
+	Notes     []notes.Entry `json:"notes,omitempty"`
 }
 
 // Stat describes artefacts; unknown refs are listed apart.

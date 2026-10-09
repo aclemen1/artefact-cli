@@ -718,6 +718,11 @@ Keys follow the common convention of the ecosystem's TUIs.
 | plans | `l` open a class, `h` close it or go up, `enter` list a class or show an artefact |
 | detail | `j`/`k`, `J`/`K` scroll |
 
+- Notes: an artefact is cited as `artefact:<id>`. `N` writes a note through
+  the `notes.add` command of the configuration (body on stdin, `{ref}`,
+  `{sphere}`); the detail shows the notes read by `notes.ls`, as does
+  `stat --with-notes`. artefact names no note tool: the commands are
+  configuration.
 - Every input but the filter (`/`) opens in a centred modal (the shared
   `github.com/aclemen1/tuikit`), which takes every key: `c` a form (file,
   sphere without preselection, title, date), `E` the card as a form (title,

@@ -7,6 +7,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"github.com/aclemen1/artefact-cli/internal/notes"
 	"io"
 	"os"
 	"path/filepath"
@@ -216,6 +217,7 @@ func init() {
 		Params: []spec.Param{
 			{Name: "id", Kind: spec.StringList, Positional: true, Required: true, Help: "Artefact ids or URIs (several allowed)."},
 			{Name: "with-events", Kind: spec.Bool, Help: "Include each artefact's event log."},
+			{Name: "with-notes", Kind: spec.Bool, Help: "Include each artefact's notes, read by the notes.ls command of the configuration (one call per artefact)."},
 		},
 		Examples: []string{"artefact stat 01K9B3T0Z6Q8M2C4R7V1X5N9PA", "artefact stat 01K9B3T0Z6Q8M2C4R7V1X5N9PA 01K9B3V2A8C0E2G4J6L8N0Q2S4 --with-events"},
 		Effects:  []string{"Reads only."},
@@ -224,6 +226,13 @@ func init() {
 				st, missing, err := s.Stat(ctx.List("id"), ctx.Bool("with-events"))
 				if err != nil {
 					return nil, err
+				}
+				if ctx.Bool("with-notes") {
+					for i := range st {
+						if st[i].Notes, err = notes.Of(s.Cfg, st[i].Card.ID, st[i].Card.Sphere); err != nil {
+							return nil, err
+						}
+					}
 				}
 				return map[string]any{"artefacts": st, "missing": missing}, nil
 			})

@@ -31,6 +31,12 @@ type Config struct {
 		Command []string `yaml:"command,omitempty" json:"command,omitempty"` // default [lector]
 		Auto    *bool    `yaml:"auto,omitempty" json:"auto,omitempty"`       // serve renders new versions; default true
 	} `yaml:"lector,omitempty"`
+	// Notes are the commands that read and add the notes of an artefact,
+	// with {ref} (artefact:<id>) and {sphere}; notes.add reads the body on stdin.
+	Notes struct {
+		Add []string `yaml:"add,omitempty" json:"add,omitempty"`
+		Ls  []string `yaml:"ls,omitempty" json:"ls,omitempty"`
+	} `yaml:"notes,omitempty"`
 	// Search tunes the search (SPEC §5).
 	Search struct {
 		// Semantic ranks by meaning too: "qmd" (default when the qmd command is found) or "none".

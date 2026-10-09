@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"github.com/aclemen1/artefact-cli/internal/notes"
 	"os"
 	"path/filepath"
 	"slices"
@@ -47,6 +48,20 @@ func (m *model) onModal(msg tea.Msg) (tea.Cmd, bool) {
 			return m.deposit(v.String("path"), v.String("sphere"), v.String("title"), date), true
 		case "card":
 			return m.applyCardForm(msg.Values), true
+		case "note":
+			it := m.noteFor
+			m.noteFor = nil
+			body := strings.TrimSpace(msg.Values.String("note"))
+			if it == nil || body == "" {
+				m.setStatus("no note: it was empty", false)
+				return nil, true
+			}
+			return func() tea.Msg {
+				if err := notes.Add(m.cfg, it.ID, it.Sphere, body); err != nil {
+					return doneMsg{err: err}
+				}
+				return doneMsg{status: "note added", reload: true}
+			}, true
 		case "erase":
 			if m.plan == nil {
 				return nil, true
@@ -64,8 +79,8 @@ func (m *model) onModal(msg tea.Msg) (tea.Cmd, bool) {
 			m.plan = nil
 			m.setStatus("erasure cancelled; the code is left unused and expires", false)
 			return nil, true
-		case "deposit", "card":
-			m.editCard = nil
+		case "deposit", "card", "note":
+			m.editCard, m.noteFor = nil, nil
 			m.setStatus("cancelled", false)
 			return nil, true
 		}
@@ -142,7 +157,8 @@ func (m *model) edit(c *store.Card) tea.Cmd {
 		date,
 		tuikit.Text("filename", "File name").Default(c.Filename),
 		tuikit.Text("mime", "Type").Default(c.Mime).Help("media type, e.g. application/pdf"),
-		tuikit.Text("tags", "Tags").Default(strings.Join(c.Tags, ", ")).Help("comma-separated"),
+		tuikit.Refs("tags", "Tags", m.tagCompleter(c.Sphere)).Default(append([]string(nil), c.Tags...)).
+			Help("enter or comma adds one; backspace on an empty entry removes the last"),
 		tuikit.TextArea("dc", "Dublin Core").Default(yamlOf(c.DC)).Help("YAML: creator: …, subject: …"),
 		tuikit.TextArea("x", "Extensions").Default(yamlOf(c.X)).Help("YAML, one namespace per key"),
 	).Validate(func(v tuikit.Values) tuikit.Errors {
@@ -173,7 +189,7 @@ func (m *model) applyCardForm(v tuikit.Values) tea.Cmd {
 	if mo, ok := v.Moment("date"); ok {
 		after.Date = mo.Date
 	}
-	for _, t := range strings.Split(v.String("tags"), ",") {
+	for _, t := range v.Strings("tags") {
 		if t = strings.TrimSpace(t); t != "" {
 			after.Tags = append(after.Tags, t)
 		}
@@ -205,4 +221,29 @@ func eraseQuestion(p *store.Plan) string {
 	}
 	b.WriteString("Type the code to confirm.")
 	return b.String()
+}
+
+// tagCompleter proposes the tags already used in sphere, most used first.
+func (m *model) tagCompleter(sphere string) tuikit.Completer {
+	counts, _ := m.st.TagCounts(sphere)
+	tags := make([]string, 0, len(counts))
+	for t := range counts {
+		tags = append(tags, t)
+	}
+	slices.SortFunc(tags, func(a, b string) int {
+		if counts[a] != counts[b] {
+			return counts[b] - counts[a]
+		}
+		return strings.Compare(a, b)
+	})
+	return func(q string) []tuikit.Item {
+		q = strings.ToLower(strings.TrimSpace(q))
+		var out []tuikit.Item
+		for _, t := range tags {
+			if q == "" || strings.Contains(strings.ToLower(t), q) {
+				out = append(out, tuikit.Item{Value: t, Label: fmt.Sprintf("%s (%d)", t, counts[t])})
+			}
+		}
+		return out
+	}
 }

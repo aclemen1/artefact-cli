@@ -718,6 +718,10 @@ Keys follow the common convention of the ecosystem's TUIs.
 | plans | `l` open a class, `h` close it or go up, `enter` list a class or show an artefact |
 | detail | `j`/`k`, `J`/`K` scroll |
 
+- `artefact tui --select <id|uri>` opens on that artefact, selected and
+  visible: the view widens once when it hides it (every sphere, no filter,
+  the archives for an archived one); an unknown id opens the TUI as usual,
+  with a message. A reload drops `--select` and keeps the current selection.
 - Notes: an artefact is cited as `artefact:<id>`. `N` writes a note through
   the `notes.add` command of the configuration (body on stdin, `{ref}`,
   `{sphere}`); the detail shows the notes read by `notes.ls`, as does

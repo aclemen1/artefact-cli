@@ -31,7 +31,7 @@ import (
 type Locator func(cfg *config.Config, st *store.Store, id string) (string, string, error)
 
 // Run shows the TUI over a store already scoped to the spheres it may use.
-func Run(cfg *config.Config, st *store.Store, locate Locator, version string) error {
+func Run(cfg *config.Config, st *store.Store, locate Locator, version, selectID string) error {
 	tuikit.SetLanguage(tuikit.English) // as the rest of the TUI; dates are still read in French too
 	m := newModel(cfg, st, locate)
 	if exe, err := os.Executable(); err == nil {
@@ -44,6 +44,9 @@ func Run(cfg *config.Config, st *store.Store, locate Locator, version string) er
 	m.build = buildLabel(version, m.exe)
 	m.loadPrefs(prefsPath())
 	m.loadResume()
+	if m.resumed == nil {
+		m.selectOnStart(selectID)
+	}
 	p := tea.NewProgram(m)
 	stop := watchSignals(p)
 	_, err := p.Run()
@@ -127,6 +130,7 @@ type model struct {
 	pendingG     bool              // g pressed: a second g goes to the top
 	target       string            // artefact a prompt acts on (seal)
 	modal        *tuikit.Modal     // the open input, if any: it takes every key
+	selecting    *selectReq        // --select, applied once the list is read
 	noteFor      *store.ListItem   // artefact the open note editor writes to
 	build        string            // version and commit, shown in the header
 	resumed      *resume           // state carried over a reload, applied once the list is read
@@ -356,6 +360,9 @@ func (m *model) updateBase(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.resumed != nil {
 			return m, tea.Batch(m.refreshCopies(), m.resumeCmds())
+		}
+		if m.selecting != nil {
+			return m, tea.Batch(m.refreshCopies(), m.applySelect())
 		}
 		return m, m.refreshCopies()
 	case plansMsg:

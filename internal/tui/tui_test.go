@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"github.com/aclemen1/tuikit"
 	"os"
 	"path/filepath"
@@ -778,5 +779,48 @@ esac
 	press(t, m, "enter") // detail
 	if s := screen(m); !strings.Contains(s, "Notes (1)") || !strings.Contains(s, "garantie jusqu'en 2028") {
 		t.Fatalf("detail without the note:\n%s", s)
+	}
+}
+
+func TestSelectOnStart(t *testing.T) {
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso", "pro"}}
+	st, _ := store.Open(cfg, nil, "test")
+	defer st.Close()
+	st.Init()
+	var target *store.PutResult
+	for i := range 40 {
+		r, _ := st.Put(strings.NewReader(fmt.Sprint(i)), store.PutOptions{Sphere: "perso", Filename: fmt.Sprintf("f%02d.pdf", i)})
+		if i == 3 {
+			target = r
+		}
+	}
+	st.Archive(target.URI, true, "test")
+	locate := func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil }
+
+	m := newModel(cfg, st, locate)
+	m.w, m.h = 120, 20
+	m.sphere = "pro" // as remembered from the last session
+	m.selectOnStart(target.ID)
+	drive(t, m, m.Init())
+	if it := m.current(); it == nil || it.ID != target.ID {
+		t.Fatalf("not selected: %+v (sphere %q archived %v)", it, m.sphere, m.archived)
+	}
+	if !m.archived || m.sphere != "" {
+		t.Errorf("the view must widen: sphere %q archived %v", m.sphere, m.archived)
+	}
+	if !strings.Contains(screen(m), target.Title) {
+		t.Error("the selected artefact must be visible")
+	}
+
+	n := newModel(cfg, st, locate)
+	n.w, n.h = 120, 20
+	n.selectOnStart("01AAAAAAAAAAAAAAAAAAAAAAAA")
+	drive(t, n, n.Init())
+	if !n.statusErr || !strings.Contains(n.status, "no artefact") || len(n.visible()) == 0 {
+		t.Fatalf("unknown id: %q, %d rows", n.status, len(n.visible()))
+	}
+
+	if got := strings.Join(argsWithoutSelect([]string{"artefact", "tui", "--select", "X", "--spheres", "perso", "--select=Y"}), " "); got != "artefact tui --spheres perso" {
+		t.Errorf("args %q", got)
 	}
 }

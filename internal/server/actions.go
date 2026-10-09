@@ -291,12 +291,15 @@ func Locate(cfg *config.Config, st *store.Store, id string) (path, from string, 
 func init() {
 	spec.Register(&spec.Action{
 		Category: "ops", Name: "tui",
-		Summary:    "Browse the artefacts in the terminal: card, versions, holders, events; open, edit the card, seal, erase.",
-		Discussion: "Keys: enter detail, o open, / filter, s sphere, O orphaned only, r refresh, q quit; in a detail, e edits the card in $EDITOR, S seals, x erases (plan, then the code to type), X erases a held artefact.",
-		Params:     []spec.Param{{Name: "spheres", Kind: spec.String, Help: "Comma-separated spheres to show. Defaults to every configured sphere."}},
-		Examples:   []string{"artefact tui", "artefact tui --spheres perso"},
-		Effects:    []string{"Reads the store; edits, seals and erases only on an explicit key and confirmation."},
-		Meta:       true,
+		Summary:    "Browse the artefacts in the terminal: list and plans, card, versions, holders, notes, events; open, edit, classify, archive, seal, erase.",
+		Discussion: "? in the TUI lists every key. --select opens the TUI on one artefact, selected and visible (the view widens to show it); an unknown id opens the TUI as usual, with a message.",
+		Params: []spec.Param{
+			{Name: "spheres", Kind: spec.String, Help: "Comma-separated spheres to show. Defaults to every configured sphere."},
+			{Name: "select", Kind: spec.String, Help: "Artefact to open the TUI on, selected: a ULID or artefact://<sphere>/<id>."},
+		},
+		Examples: []string{"artefact tui", "artefact tui --spheres perso", "artefact tui --select 01K9B3T0Z6Q8M2C4R7V1X5N9PA", "artefact tui --select artefact://perso/01K9B3T0Z6Q8M2C4R7V1X5N9PA"},
+		Effects:  []string{"Reads the store; edits, seals and erases only on an explicit key and confirmation."},
+		Meta:     true,
 		Run: func(ctx *spec.Context) (any, error) {
 			cfg, _, err := load(ctx)
 			if err != nil {
@@ -311,7 +314,7 @@ func init() {
 				return nil, err
 			}
 			defer st.Close()
-			return spec.Streamed{}, tui.Run(cfg, st, Locate, actions.Version)
+			return spec.Streamed{}, tui.Run(cfg, st, Locate, actions.Version, ctx.Str("select"))
 		},
 	})
 }

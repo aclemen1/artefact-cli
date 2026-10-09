@@ -212,5 +212,5 @@ func watchSignals(p *tea.Program) func() {
 // execSelf replaces the process with the binary at exe, carrying the state.
 func execSelf(exe string) error {
 	env := append(os.Environ(), resumeEnv+"="+resumePath())
-	return syscall.Exec(exe, os.Args, env)
+	return syscall.Exec(exe, argsWithoutSelect(os.Args), env)
 }

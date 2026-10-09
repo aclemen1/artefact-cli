@@ -241,6 +241,9 @@ func (m *model) keyPlans(k tea.KeyPressMsg) tea.Cmd {
 			m.rebuildTree()
 		}
 	}
+	if k.String() != "g" {
+		m.pendingG = false
+	}
 	switch k.String() {
 	case "esc", "C":
 		if m.filter != "" && pv.assign == nil && k.String() == "esc" {
@@ -259,7 +262,14 @@ func (m *model) keyPlans(k tea.KeyPressMsg) tea.Cmd {
 		pv.sel = min(pv.sel+1, max(0, len(pv.rows)-1))
 	case "k", "up":
 		pv.sel = max(0, pv.sel-1)
-	case "g", "home":
+	case "g":
+		if m.pendingG {
+			m.pendingG, pv.sel = false, 0 // gg: top
+		} else {
+			m.pendingG = true
+		}
+		return nil
+	case "home":
 		pv.sel = 0
 	case "G", "end":
 		pv.sel = max(0, len(pv.rows)-1)
@@ -267,10 +277,6 @@ func (m *model) keyPlans(k tea.KeyPressMsg) tea.Cmd {
 		pv.sel = min(pv.sel+m.h/2, max(0, len(pv.rows)-1))
 	case "pgup", "ctrl+u":
 		pv.sel = max(0, pv.sel-m.h/2)
-	case "space", "tab":
-		if r != nil {
-			toggle(!r.opened)
-		}
 	case "l", "right":
 		switch {
 		case r == nil:
@@ -365,9 +371,9 @@ func (m *model) renderPlans() string {
 	pv := m.planView
 	var lines []string
 	if pv.assign != nil {
-		lines = []string{sTitle.Render("Place "+pv.assign.Title) + sMuted.Render("  ·  space opens  ·  enter places it there  ·  esc back"), ""}
+		lines = []string{sTitle.Render("Place "+pv.assign.Title) + sMuted.Render("  ·  l opens, h closes  ·  enter places it there  ·  esc back"), ""}
 	} else {
-		lines = []string{pad(m.header(), m.w), sMuted.Render("  plans  ·  space opens a class  ·  enter lists the class, or shows the artefact  ·  every key of the list works here"), ""}
+		lines = []string{pad(m.header(), m.w), sMuted.Render("  plans  ·  l opens a class, h closes it  ·  enter lists the class, or shows the artefact  ·  every key of the list works here"), ""}
 	}
 	h := m.h - 3 - len(lines)
 	if pv.sel < pv.top {

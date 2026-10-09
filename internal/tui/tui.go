@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/aclemen1/tuikit"
 	"io"
 	"os"
 	"os/exec"
@@ -29,11 +30,26 @@ import (
 type Locator func(cfg *config.Config, st *store.Store, id string) (string, string, error)
 
 // Run shows the TUI over a store already scoped to the spheres it may use.
-func Run(cfg *config.Config, st *store.Store, locate Locator) error {
+func Run(cfg *config.Config, st *store.Store, locate Locator, version string) error {
 	m := newModel(cfg, st, locate)
+	if exe, err := os.Executable(); err == nil {
+		if real, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = real
+		}
+		m.exe = exe
+		m.exeStamp, _ = stampOf(exe)
+	}
+	m.build = buildLabel(version, m.exe)
 	m.loadPrefs(prefsPath())
-	defer m.Cleanup()
-	_, err := tea.NewProgram(m).Run()
+	m.loadResume()
+	p := tea.NewProgram(m)
+	stop := watchSignals(p)
+	_, err := p.Run()
+	stop()
+	m.Cleanup()
+	if err == nil && m.reexec {
+		return execSelf(m.exe)
+	}
 	return err
 }
 
@@ -102,6 +118,15 @@ type model struct {
 	versions     map[string]int64  // index versions last seen, by sphere
 	signatures   map[string]string // artefact count and last card change, by sphere
 	stale        bool              // another process changed the store; reload when free
+	exe          string            // the running binary, watched for a rebuild
+	exeStamp     binStamp          // its time and inode at start
+	newBinary    bool              // a new binary waits for the TUI to be at rest
+	reexec       bool              // quit to exec the new binary
+	pendingG     bool              // g pressed: a second g goes to the top
+	target       string            // artefact a prompt acts on (seal)
+	modal        *tuikit.Modal     // the open input, if any: it takes every key
+	build        string            // version and commit, shown in the header
+	resumed      *resume           // state carried over a reload, applied once the list is read
 	classFilter  treeRow           // list filtered on a class (plan "" for none)
 	revealed     []string          // decrypted temporary files, deleted on quit
 
@@ -154,10 +179,6 @@ type (
 	copiesMsg struct {
 		states   map[string]store.CopyState
 		progress []store.SyncProgress
-	}
-	editedMsg struct {
-		id, path string
-		err      error
 	}
 )
 
@@ -272,6 +293,25 @@ func (m *model) refreshCopies() tea.Cmd {
 }
 
 func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if cmd, ok := m.onModal(msg); ok {
+		return m, cmd
+	}
+	if m.modal.Open() {
+		switch msg.(type) {
+		case tea.KeyPressMsg, tea.PasteMsg, tea.PasteStartMsg, tea.PasteEndMsg:
+			return m, m.modal.Update(msg) // no key of the TUI while typing
+		case tea.WindowSizeMsg:
+		default:
+			// The rest (ticks, reloads) runs as usual; the modal sees it too.
+			cmd := m.modal.Update(msg)
+			_, rest := m.updateBase(msg)
+			return m, tea.Batch(cmd, rest)
+		}
+	}
+	return m.updateBase(msg)
+}
+
+func (m *model) updateBase(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		// A terminal that reports no size still gets a usable layout.
@@ -280,6 +320,9 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.w, m.h = max(m.w, 80), max(m.h, 24)
 		}
 		m.input.SetWidth(max(10, m.w-30))
+		if m.modal.Open() {
+			m.modal.SetSize(m.w, m.h)
+		}
 		return m, nil
 	case tea.BackgroundColorMsg:
 		darkBackground = msg.IsDark()
@@ -304,6 +347,9 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		if m.resumed != nil {
+			return m, tea.Batch(m.refreshCopies(), m.resumeCmds())
+		}
 		return m, m.refreshCopies()
 	case plansMsg:
 		if m.planView != nil {
@@ -324,7 +370,10 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tickMsg:
-		return m, tea.Batch(m.refreshCopies(), m.checkEdits(), m.watchStore(), tick())
+		return m, tea.Batch(m.refreshCopies(), m.checkEdits(), m.watchStore(), m.checkBinary(), tick())
+	case reloadMsg:
+		m.newBinary = true
+		return m, m.reloadIfIdle()
 	case versionsMsg:
 		return m, m.onVersions(msg)
 	case editedContentMsg:
@@ -411,13 +460,8 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus(msg.err.Error(), true)
 			return m, nil
 		}
-		m.plan, m.prompt = msg.plan, promptErase
-		m.input.Reset()
-		m.input.Prompt = "type the code " + msg.plan.Code + " to erase › "
-		m.input.Placeholder = ""
-		return m, m.input.Focus()
-	case editedMsg:
-		return m, m.applyEdit(msg)
+		m.plan = msg.plan
+		return m, m.openModal("Erase", tuikit.NewConfirmTyped("erase", eraseQuestion(msg.plan), msg.plan.Code))
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
@@ -468,8 +512,23 @@ func (m *model) move(d int) {
 
 func (m *model) keyList(k tea.KeyPressMsg) tea.Cmd {
 	m.status = ""
-	switch k.String() {
-	case "esc":
+	key := k.String()
+	if key == "g" {
+		if m.pendingG {
+			m.pendingG, m.sel = false, 0 // gg: top
+		} else {
+			m.pendingG = true
+		}
+		return nil
+	}
+	m.pendingG = false
+	if it := m.current(); it != nil {
+		if cmd, ok := m.itemKey(key, *it, m.planView != nil); ok {
+			return cmd
+		}
+	}
+	switch key {
+	case "esc", "h", "left":
 		// Back from a search or a class to the whole list.
 		if m.filter != "" || m.searched || m.classFilter.plan != "" {
 			m.filter, m.searched, m.classFilter, m.sel = "", false, treeRow{}, 0
@@ -479,10 +538,16 @@ func (m *model) keyList(k tea.KeyPressMsg) tea.Cmd {
 		m.move(1)
 	case "k", "up":
 		m.move(-1)
-	case "g", "home":
+	case "home":
 		m.sel = 0
 	case "G", "end":
 		m.move(len(m.visible()))
+	case "1", "2", "3", "4", "5":
+		return m.goView(key)
+	case "R":
+		return m.syncNow()
+	case "c":
+		return m.askDeposit()
 	case "pgdown", "ctrl+d":
 		m.move(m.listHeight())
 	case "pgup", "ctrl+u":
@@ -539,35 +604,10 @@ func (m *model) keyList(k tea.KeyPressMsg) tea.Cmd {
 		cmd := m.openPlans(nil)
 		m.planView.focus = focus
 		return cmd
-	case "c":
-		if it := m.current(); it != nil {
-			cp := *it
-			return m.openPlans(&cp)
-		}
-	case "e", "E":
-		if it := m.current(); it != nil {
-			st, _, err := m.st.Stat([]string{it.URI}, false)
-			if err != nil || len(st) == 0 {
-				m.setStatus("cannot read the card", true)
-				return nil
-			}
-			if k.String() == "E" {
-				return m.edit(st[0].Card)
-			}
-			return m.editContent(st[0].Card)
-		}
-	case "enter", "l", "right":
+	case "enter", "l", "right", "tab":
 		if it := m.current(); it != nil {
 			m.mode, m.detail, m.scroll = modeDetail, nil, 0
 			return m.loadDetail(it.URI)
-		}
-	case "o":
-		if it := m.current(); it != nil {
-			return m.open(it.URI, it.Mime)
-		}
-	case "f":
-		if it := m.current(); it != nil {
-			return m.showInFileManager(*it)
 		}
 	}
 	return nil
@@ -583,56 +623,24 @@ func (m *model) keyDetail(k tea.KeyPressMsg) tea.Cmd {
 	}
 	id := m.detail.URI
 	switch k.String() {
-	case "esc", "h", "left", "backspace":
+	case "esc", "h", "left", "backspace", "tab":
 		m.mode, m.detail = modeList, nil
 		if m.planView != nil {
 			return tea.Batch(m.load(), m.loadPlans())
 		}
 		return m.load()
-	case "j", "down":
+	case "j", "down", "J":
 		m.scroll++
-	case "k", "up":
+	case "k", "up", "K":
 		m.scroll = max(0, m.scroll-1)
-	case "o":
-		return m.open(id, m.detail.Card.Mime)
-	case "f":
+	case "R":
+		return m.syncNow()
+	default:
 		if r, err := m.st.Resolve(id); err == nil {
-			return m.showInFileManager(store.ListItem{Row: r.Row, Sphere: r.Sphere, URI: id})
-		}
-	case "e":
-		return m.editContent(m.detail.Card)
-	case "E":
-		return m.edit(m.detail.Card)
-	case "c":
-		c := m.detail.Card
-		return m.openPlans(&store.ListItem{Row: index.Row{ID: c.ID, Title: c.Title}, Sphere: c.Sphere, URI: m.detail.URI})
-	case "a":
-		toArchive := m.detail.Card.Archived == ""
-		return func() tea.Msg {
-			if _, err := m.st.Archive(id, toArchive, "tui"); err != nil {
-				return doneMsg{err: err}
+			it := store.ListItem{Row: r.Row, Sphere: r.Sphere, URI: id}
+			if cmd, ok := m.itemKey(k.String(), it, false); ok {
+				return cmd
 			}
-			if toArchive {
-				return doneMsg{status: "archived", reload: true}
-			}
-			return doneMsg{status: "active again", reload: true}
-		}
-	case "S":
-		if m.detail.Card.Sealed {
-			m.setStatus("already sealed", false)
-			return nil
-		}
-		m.prompt = promptSeal
-		m.input.Reset()
-		m.input.Prompt = "seal and erase the clear versions? type yes › "
-		m.input.Placeholder = ""
-		return m.input.Focus()
-	case "x", "X":
-		m.force = k.String() == "X"
-		force := m.force
-		return func() tea.Msg {
-			p, err := m.st.PlanErase(store.EraseRequest{Refs: []string{id}, Force: force})
-			return planMsg{p, err}
 		}
 	}
 	return nil
@@ -641,97 +649,14 @@ func (m *model) keyDetail(k tea.KeyPressMsg) tea.Cmd {
 func (m *model) keyPrompt(k tea.KeyPressMsg) tea.Cmd {
 	switch k.String() {
 	case "esc":
-		if m.prompt == promptErase {
-			m.setStatus("erasure cancelled; the code is left unused and expires", false)
-		}
-		if m.prompt == promptRevise && m.toSave != nil {
-			m.toSave.seen = m.toSave.mtime()
-		}
-		m.prompt, m.plan, m.reveal, m.toSave = promptNone, nil, nil, nil
+		m.prompt = promptNone // the filter: the other inputs are modals
 		m.input.Blur()
 		return nil
 	case "enter":
 		p, val := m.prompt, strings.TrimSpace(m.input.Value())
 		m.prompt = promptNone
 		m.input.Blur()
-		switch p {
-		case promptFilter:
-			m.filter, m.sel = val, 0
-			if val != "" {
-				sphere, state := m.sphere, "active"
-				if m.archived {
-					state = "archived"
-				}
-				return m.startSearch(val, sphere, state)
-			}
-			return m.load()
-		case promptRevise:
-			e := m.toSave
-			m.toSave = nil
-			if e == nil {
-				return nil
-			}
-			if !strings.EqualFold(val, "yes") {
-				e.seen = e.mtime() // asked once for this change
-				m.setStatus("not saved; the copy stays at "+e.path, false)
-				return nil
-			}
-			return func() tea.Msg {
-				r, err := m.st.Revise(e.id, e.path)
-				if err != nil {
-					return doneMsg{err: err}
-				}
-				e.seen, e.sum = e.mtime(), sumFile(e.path)
-				return doneMsg{status: fmt.Sprintf("saved as version v%d", r.Version), reload: true}
-			}
-		case promptReveal:
-			req := m.reveal
-			m.reveal = nil
-			if req == nil || !strings.EqualFold(val, "yes") {
-				m.setStatus("not opened", false)
-				return nil
-			}
-			p, err := m.decrypt(req.id)
-			if err != nil {
-				m.setStatus(err.Error(), true)
-				return nil
-			}
-			return m.openPath(p, req.mime, "decrypted copy")
-		case promptSeal:
-			if !strings.EqualFold(val, "yes") {
-				m.setStatus("not sealed", false)
-				return nil
-			}
-			id := m.detail.URI
-			return func() tea.Msg {
-				r, err := m.st.Seal(id)
-				if err != nil {
-					return doneMsg{err: err}
-				}
-				return doneMsg{status: fmt.Sprintf("sealed; %d clear version(s) erased", r.VersionsErased), reload: true}
-			}
-		case promptErase:
-			plan := m.plan
-			m.plan = nil
-			if !strings.EqualFold(val, plan.Code) {
-				m.setStatus("erasure cancelled: the code was not typed", false)
-				return nil
-			}
-			return func() tea.Msg {
-				proof, err := m.st.ConfirmErase(plan.Code)
-				if err != nil {
-					return doneMsg{err: err}
-				}
-				ok := 0
-				for _, l := range proof.Locations {
-					if l.Verified {
-						ok++
-					}
-				}
-				return doneMsg{status: fmt.Sprintf("erased; %d location(s) purged and verified", ok), reload: true, back: true}
-			}
-		}
-		return nil
+		return m.finish(p, val)
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(k)
@@ -750,11 +675,7 @@ type revealReq struct{ id, mime string }
 func (m *model) open(id string, mime string) tea.Cmd {
 	if r, err := m.st.Resolve(id); err == nil && r.Row.Sealed {
 		m.reveal = &revealReq{id, mime}
-		m.prompt = promptReveal
-		m.input.Reset()
-		m.input.Prompt = "sealed: decrypt into a temporary file, deleted when the TUI quits? type yes › "
-		m.input.Placeholder = ""
-		return m.input.Focus()
+		return m.confirm(promptReveal, "reveal", "Sealed artefact", "Decrypt it into a temporary file, deleted when the TUI quits?")
 	}
 	p, from, err := m.locate(m.cfg, m.st, id)
 	if err != nil {
@@ -838,43 +759,8 @@ type editable struct {
 	X        map[string]any `yaml:"x"`
 }
 
-func (m *model) edit(c *store.Card) tea.Cmd {
-	m.editCard = c
-	b, _ := yaml.Marshal(editable{c.Title, c.Date, c.Filename, c.Mime, c.Tags, c.DC, c.X})
-	f, err := os.CreateTemp("", "artefact-card-*.yaml")
-	if err != nil {
-		m.setStatus(err.Error(), true)
-		return nil
-	}
-	header := "# Card of " + c.ID + ". Edit, save and quit; the other fields are kept by artefact.\n"
-	f.WriteString(header)
-	f.Write(b)
-	f.Close()
-	id, path := c.ID, f.Name()
-	cmd := exec.Command("sh", "-c", editorCommand()+` "$1"`, "sh", path)
-	return tea.ExecProcess(cmd, func(err error) tea.Msg { return editedMsg{id: id, path: path, err: err} })
-}
-
-func (m *model) applyEdit(e editedMsg) tea.Cmd {
-	defer os.Remove(e.path)
-	if e.err != nil {
-		m.setStatus("editor: "+e.err.Error(), true)
-		return nil
-	}
-	b, err := os.ReadFile(e.path)
-	if err != nil {
-		m.setStatus(err.Error(), true)
-		return nil
-	}
-	var after editable
-	if err := yaml.Unmarshal(b, &after); err != nil {
-		m.setStatus("card not changed: "+err.Error(), true)
-		return nil
-	}
-	cur := m.editCard
-	if cur == nil {
-		return nil
-	}
+// saveCard saves the fields of after that differ from the card cur.
+func (m *model) saveCard(cur *store.Card, after editable) tea.Cmd {
 	var sets []string
 	if after.Title != cur.Title {
 		sets = append(sets, "title="+after.Title)
@@ -921,7 +807,7 @@ func (m *model) applyEdit(e editedMsg) tea.Cmd {
 		m.setStatus("card unchanged", false)
 		return nil
 	}
-	id := e.id
+	id := cur.ID
 	return func() tea.Msg {
 		if _, err := m.st.EditCard(id, sets, doc); err != nil {
 			return doneMsg{err: err}
@@ -933,7 +819,7 @@ func (m *model) applyEdit(e editedMsg) tea.Cmd {
 // ------------------------------------------------------------------ view
 
 func (m *model) View() tea.View {
-	v := tea.NewView(m.render())
+	v := tea.NewView(tuikit.Overlay(m.render(), m.modal, m.w, m.h))
 	v.AltScreen = true
 	return v
 }
@@ -980,6 +866,12 @@ func (m *model) header() string {
 		extra += sMuted.Render("  filter: ") + sText.Render(m.filter)
 	}
 	extra += sMuted.Render("  sort: ") + sText.Render(m.orderLabel())
+	if m.newBinary {
+		extra += "  " + sWarn.Render("new version: reloads when you are done")
+	}
+	if m.build != "" {
+		extra += sMuted.Render("  ·  " + m.build)
+	}
 	return sTitle.Render("artefact") + sMuted.Render("  ·  ") + scope + sMuted.Render(fmt.Sprintf("  ·  %d artefact(s)", len(m.visible()))) + extra
 }
 
@@ -1199,11 +1091,11 @@ func (m *model) footer() string {
 	case m.prompt != promptNone:
 		help = m.input.View()
 	case m.planView != nil && m.mode != modeDetail && m.planView.assign == nil:
-		help = helpLine("space", "open/close", "enter", "list class/detail", "o", "open", "f", "finder", "e/E", "edit content/card", "c", "classify", "/", "search", "t/T", "sort", "s", "sphere", "esc", "back", "?", "keys", "q", "quit")
+		help = helpLine("l/h", "open/close", "enter", "list class/detail", "o", "open", "f", "finder", "E/M", "card/content", "m", "classify", "x", "archive", "/", "search", "t/T", "sort", "esc", "back", "?", "keys", "q", "quit")
 	case m.mode == modeDetail:
-		help = helpLine("o", "open", "f", "finder", "e", "edit content", "E", "edit card", "a", "archive", "S", "seal", "x", "erase", "esc", "back", "?", "keys", "q", "quit")
+		help = helpLine("o", "open", "f", "finder", "E", "edit card", "M", "edit content", "m", "classify", "x", "archive", "S", "seal", "#", "erase", "esc", "back", "?", "keys", "q", "quit")
 	default:
-		help = helpLine("enter", "detail", "o", "open", "f", "finder", "e/E", "edit content/card", "C", "plans", "c", "classify", "/", "search", "t/T", "sort", "esc", "back", "?", "keys", "q", "quit")
+		help = helpLine("enter", "detail", "o", "open", "f", "finder", "E/M", "card/content", "m", "classify", "x", "archive", "c", "new", "2", "plans", "/", "search", "t/T", "sort", "esc", "back", "?", "keys", "q", "quit")
 	}
 	status := ""
 	if m.status != "" {
@@ -1242,45 +1134,38 @@ func (m *model) legendLines() []string {
 		title string
 		keys  [][2]string
 	}{
-		{"List", [][2]string{
-			{"j k  ↑ ↓", "move"}, {"g  G", "top, end"}, {"ctrl+d  ctrl+u", "page down, up"},
-			{"enter  l", "detail of the artefact"},
-			{"f", "show the file in the Finder (or the Linux file manager), selected: in the mounted view (in the plans tree, at its place in the plan: plans/<plan>/…), else the local copy"},
-			{"o", "open: a text file in $EDITOR, any other in its application; a sealed one after yes, decrypted into a temporary file deleted on quit"},
+		{"Move and views", [][2]string{
+			{"j k  ↑ ↓", "move"}, {"gg  G", "top, end"}, {"ctrl+d  ctrl+u", "page down, up"},
+			{"enter  l  tab", "detail of the artefact"}, {"esc  h", "back: from the detail, the plans, a search or a class (esc never quits)"},
+			{"1", "the list"}, {"2  C", "the plans: classes and their artefacts, as a tree"},
+			{"3  P", "pending: classification waits for you"}, {"4  A", "archives"}, {"5  O", "orphaned: artefacts no tool holds"},
+			{"s", "sphere: all, then each sphere in turn"},
+			{"t  T", "sort: deposited, date, updated, title, size (and relevance after a search), in turn; T reverses"},
+			{"r", "refresh, and clear the search"}, {"R", "sync now: copy to the backends what is not there yet"},
 			{"/", "search: the words filter while typing (accents ignored); enter searches titles, cards and texts, by words and by meaning"},
 			{"", `  "phrase"  -word  a OR b  x AROUND(5) y  title: file: text: card:`},
 			{"", "  type:pdf|image|text|docx  class:4.2|banque  plan:  tag:  -tag:  sphere:"},
 			{"", "  after:2024-03  before:2025  year:2023  is:sealed|archived|active|pending|orphaned|classified|unclassified  -is:"},
-			{"r", "refresh, and clear the search"},
-			{"s", "sphere: all, then each sphere in turn"},
-			{"O", "orphaned only: artefacts no tool holds"},
-			{"P", "pending only: classification waits for you"},
-			{"A", "archives: the archived artefacts instead of the active ones"},
-			{"t", "sort: deposited, date, updated, title, size (and relevance after a search), in turn"},
-			{"T", "reverse the sort: ↓ newest, largest, most relevant first, or Z-A; ↑ the other way"},
-			{"e  E", "edit the content, or the card, of the selected artefact"},
-			{"C", "plans: the classes with their counts; enter lists a class (sub-classes included); C again clears it"},
-			{"c", "classify the selected artefact: pick its class in the plan (your decision, never overwritten)"},
 		}},
-		{"Plans (C)", [][2]string{
-			{"space  l  →", "open a class: its sub-classes, then its artefacts"},
+		{"On the selected artefact (list, plans, detail)", [][2]string{
+			{"o", "open, read-only: a text file in $EDITOR, any other in its application; a sealed one after yes, decrypted into a temporary file deleted on quit"},
+			{"f", "show the file in the Finder (or the Linux file manager), selected: in the mounted view (from the plans, at its place in the plan), else the local copy"},
+			{"E", "edit the card in $EDITOR: title, date, file name, type, tags, dc, x"},
+			{"M", "edit the content: text in $EDITOR, other files in their application; a changed copy is saved as the next version (the earlier ones are kept)"},
+			{"m", "place it in a class of the plan (your decision, never overwritten)"},
+			{"e  x", "archive, or make active again (reversible)"},
+			{"S", "seal: encrypt, and erase the clear versions everywhere (type yes)"},
+			{"#", "erase for good: shows the plan, asks for its code"},
+			{"X", "erase an artefact a tool still holds (your override)"},
+			{"c", "deposit a file (new artefact): its path, then its sphere when none is in view"},
+		}},
+		{"Plans (2, C)", [][2]string{
+			{"l  →", "open a class: its sub-classes, then its artefacts"},
 			{"h  ←", "close the class, or go up to its parent"},
 			{"enter", "on a class, list it (sub-classes included); on an artefact, its detail (esc comes back here)"},
-			{"o", "open the artefact"},
-			{"t  T", "sort the artefacts of each class, or reverse the sort; classes keep the order of their notation"},
+			{"t  T", "sort the artefacts of each class; classes keep the order of their notation"},
 		}},
-		{"Detail", [][2]string{
-			{"o", "open, as in the list"},
-			{"f", "show the file in the Finder, as in the list"},
-			{"E", "edit the card in $EDITOR: title, date, file name, type, dc, x"},
-			{"c", "classify: pick its class in the plan"},
-			{"e", "edit the content: text in $EDITOR, other files in their application; a changed copy is saved as the next version (the earlier ones are kept)"},
-			{"a", "archive, or make active again"},
-			{"S", "seal: encrypt, and erase the clear versions everywhere (type yes)"},
-			{"x", "erase: shows the plan, asks for its code"},
-			{"X", "erase an artefact a tool still holds (your override)"},
-			{"j k", "scroll"}, {"esc  h", "back to the list"},
-		}},
+		{"Detail", [][2]string{{"j k  J K", "scroll"}}},
 		{"Everywhere", [][2]string{{"?", "these keys"}, {"esc", "back to the previous view; never quits"}, {"q  ctrl+c", "quit, from any view (in a field, q is typed)"}}},
 	} {
 		section(theme.title)
@@ -1436,11 +1321,7 @@ func (m *model) askRevise(e *edit) tea.Cmd {
 		return nil
 	}
 	m.toSave = e
-	m.prompt = promptRevise
-	m.input.Reset()
-	m.input.Prompt = e.name + " changed: save as the next version? type yes › "
-	m.input.Placeholder = ""
-	return m.input.Focus()
+	return m.confirm(promptRevise, "revise", "New version", e.name+" changed: save it as the next version? The earlier versions are kept.")
 }
 
 // checkEdits looks for working copies saved since last asked.
@@ -1643,4 +1524,87 @@ func (m *model) selectInList(uri string) {
 			return
 		}
 	}
+}
+
+// finish runs what an answered question asked: val is "yes", the typed
+// code, or "" when the user said no or cancelled.
+func (m *model) finish(p prompt, val string) tea.Cmd {
+	switch p {
+	case promptFilter:
+		m.filter, m.sel = val, 0
+		if val != "" {
+			sphere, state := m.sphere, "active"
+			if m.archived {
+				state = "archived"
+			}
+			return m.startSearch(val, sphere, state)
+		}
+		return m.load()
+	case promptRevise:
+		e := m.toSave
+		m.toSave = nil
+		if e == nil {
+			return nil
+		}
+		if !strings.EqualFold(val, "yes") {
+			e.seen = e.mtime() // asked once for this change
+			m.setStatus("not saved; the copy stays at "+e.path, false)
+			return nil
+		}
+		return func() tea.Msg {
+			r, err := m.st.Revise(e.id, e.path)
+			if err != nil {
+				return doneMsg{err: err}
+			}
+			e.seen, e.sum = e.mtime(), sumFile(e.path)
+			return doneMsg{status: fmt.Sprintf("saved as version v%d", r.Version), reload: true}
+		}
+	case promptReveal:
+		req := m.reveal
+		m.reveal = nil
+		if req == nil || !strings.EqualFold(val, "yes") {
+			m.setStatus("not opened", false)
+			return nil
+		}
+		p, err := m.decrypt(req.id)
+		if err != nil {
+			m.setStatus(err.Error(), true)
+			return nil
+		}
+		return m.openPath(p, req.mime, "decrypted copy")
+	case promptSeal:
+		if !strings.EqualFold(val, "yes") {
+			m.setStatus("not sealed", false)
+			return nil
+		}
+		id := m.target
+		return func() tea.Msg {
+			r, err := m.st.Seal(id)
+			if err != nil {
+				return doneMsg{err: err}
+			}
+			return doneMsg{status: fmt.Sprintf("sealed; %d clear version(s) erased", r.VersionsErased), reload: true}
+		}
+	case promptErase:
+		plan := m.plan
+		m.plan = nil
+		if !strings.EqualFold(val, plan.Code) {
+			m.setStatus("erasure cancelled: the code was not typed", false)
+			return nil
+		}
+		return func() tea.Msg {
+			proof, err := m.st.ConfirmErase(plan.Code)
+			if err != nil {
+				return doneMsg{err: err}
+			}
+			ok := 0
+			for _, l := range proof.Locations {
+				if l.Verified {
+					ok++
+				}
+			}
+			return doneMsg{status: fmt.Sprintf("erased; %d location(s) purged and verified", ok), reload: true, back: true}
+		}
+	}
+	return nil
 }

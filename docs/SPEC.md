@@ -708,12 +708,28 @@ Reads run over every granted sphere unless one is named.
 keys of office's and mnemo's TUIs. It works on the store directly, like the
 CLI, within the spheres given.
 
-| View | Shows | Keys |
-|---|---|---|
-| list | sphere, date, version, type, size, title; ◆ marks a sealed artefact | `j`/`k`, `g`/`G`, `enter` detail, `o` open, `/` filter (title, file name, id, type), `s` cycles the spheres, `O` orphaned only, `r` refresh, `q` quit |
-| plans (`C`) | the plans as a foldable tree; a class opens on its sub-classes, then its artefacts; counts include sub-classes | `space`/`l` open, `h` close or go up, `enter` lists a class or shows an artefact, `o` open, `t`/`T` sort, `esc` back |
-| detail | card, Dublin Core, extensions, versions, holders, events (newest first) | `o` open, `e` edit the content, `E` edit the card in `$EDITOR`, `S` seal (type `yes`), `x` erase, `X` erase a held artefact, `j`/`k` scroll, `esc` back |
+Keys follow the common convention of the ecosystem's TUIs.
 
+| Scope | Keys |
+|---|---|
+| move, views | `j`/`k`, `gg`/`G`, `ctrl+d`/`ctrl+u`; `enter`/`l`/`tab` detail; `esc`/`h` back (never quits); `1` list, `2` plans (`C`), `3` pending (`P`), `4` archives (`A`), `5` orphaned (`O`); `s` sphere; `t`/`T` sort; `/` search; `r` refresh; `R` sync now; `?` help; `q` quit |
+| the selected artefact | `o` open read-only, `f` show in the Finder, `E` edit the card, `M` edit the content (next version), `m` place in a class, `e`/`x` archive or make active (reversible), `S` seal, `#` erase (plan and code), `X` erase a held artefact |
+| new | `c` deposit a file: its path, then its sphere when none is in view |
+| plans | `l` open a class, `h` close it or go up, `enter` list a class or show an artefact |
+| detail | `j`/`k`, `J`/`K` scroll |
+
+- Every input but the filter (`/`) opens in a centred modal (the shared
+  `github.com/aclemen1/tuikit`), which takes every key: `c` a form (file,
+  sphere without preselection, title, date), `E` the card as a form (title,
+  date, file name, type, tags, Dublin Core and extensions as YAML), yes/no
+  lists for seal, decrypt and new version, the code to type for an erasure.
+  `ctrl+s` validates, `esc` cancels (asking first when something changed).
+- The TUI watches its own binary (time and inode, every 3 s). After a
+  rebuild it execs the new binary when at rest (no prompt, no card or content
+  being edited, no search running), carrying over the view, the selection,
+  the filter or search, P/A/O, the class filter and the open detail, and says
+  « reloaded <version>»; otherwise a badge waits for rest. SIGUSR1 asks for
+  the same. The header shows the version and the commit it was built from.
 - As in every TUI of the ecosystem, `esc` goes back to the previous view
   (from a search or a class to the whole list) and never quits; `q` quits
   from any view, except in a field, where it is typed.
@@ -729,7 +745,7 @@ CLI, within the spheres given.
 - `o` opens through `locate`: from a mounted view, else from a cached copy.
 - `E` opens the editable fields (title, date, filename, mime, dc, x) as YAML;
   what changed is saved with one `card` event.
-- `x` shows the erasure plan and asks for its code; any other input cancels.
+- `#` shows the erasure plan and asks for its code; any other input cancels.
   `X` plans with `--force`, the human's override for a held artefact.
 
 ## 14. Contract with mnemo

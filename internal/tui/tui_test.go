@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"github.com/aclemen1/tuikit"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,6 +47,12 @@ func press(t *testing.T, m *model, s string) {
 		k = tea.KeyPressMsg{Code: tea.KeyEnter}
 	case "esc":
 		k = tea.KeyPressMsg{Code: tea.KeyEscape}
+	case "tab":
+		k = tea.KeyPressMsg{Code: tea.KeyTab}
+	case "right":
+		k = tea.KeyPressMsg{Code: tea.KeyRight}
+	case "ctrl+s":
+		k = tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl}
 	default:
 		r := []rune(s)[0]
 		k = tea.KeyPressMsg{Code: r, Text: s}
@@ -118,7 +125,7 @@ func TestTUI(t *testing.T) {
 	}
 
 	// Erase: the plan is shown, a wrong code cancels, the right one erases.
-	press(t, m, "x")
+	press(t, m, "#")
 	if m.plan == nil || !strings.Contains(screen(m), "Erasure plan") {
 		t.Fatalf("no plan: %s", m.status)
 	}
@@ -127,7 +134,11 @@ func TestTUI(t *testing.T) {
 	if _, err := st.Resolve(a.ID); err != nil {
 		t.Fatal("a wrong code erased the artefact")
 	}
-	press(t, m, "x")
+	press(t, m, "esc") // cancels; the code is left unused
+	if m.modal.Open() {
+		t.Fatal("esc must close the erasure")
+	}
+	press(t, m, "#")
 	typeText(t, m, m.plan.Code)
 	press(t, m, "enter")
 	if _, err := st.Resolve(a.ID); err == nil {
@@ -140,7 +151,7 @@ func TestTUI(t *testing.T) {
 	// A held artefact needs X.
 	m.sel = 0
 	press(t, m, "enter")
-	press(t, m, "x")
+	press(t, m, "#")
 	if m.plan != nil || !m.statusErr {
 		t.Errorf("x on a held artefact must refuse: %q", m.status)
 	}
@@ -159,10 +170,10 @@ func TestOpenSealedAsksThenCleansUp(t *testing.T) {
 	m.w, m.h = 120, 30
 	drive(t, m, m.Init())
 	press(t, m, "o")
-	if m.prompt != promptReveal {
+	if !m.modal.Open() {
 		t.Fatalf("no confirmation asked: %q", m.status)
 	}
-	typeText(t, m, "no")
+	typeText(t, m, "n") // Non ("o" is Oui)
 	press(t, m, "enter")
 	if len(m.revealed) != 0 {
 		t.Fatal("decrypted without yes")
@@ -200,7 +211,7 @@ func TestEditContent(t *testing.T) {
 	m.w, m.h = 120, 30
 	drive(t, m, m.Init())
 	press(t, m, "enter")
-	press(t, m, "e")
+	press(t, m, "M")
 	e := m.edits[a.ID]
 	if e == nil {
 		t.Fatalf("no working copy: %q", m.status)
@@ -208,7 +219,7 @@ func TestEditContent(t *testing.T) {
 	os.WriteFile(e.path, []byte("final"), 0o600)
 	_, cmd := m.Update(editedContentMsg{id: a.ID})
 	drive(t, m, cmd)
-	if m.prompt != promptRevise {
+	if !m.modal.Open() {
 		t.Fatalf("no save asked: %q", m.status)
 	}
 	typeText(t, m, "yes")
@@ -293,7 +304,7 @@ func TestPlansView(t *testing.T) {
 			m.sel = i
 		}
 	}
-	press(t, m, "c")
+	press(t, m, "m")
 	for i, r := range m.planView.rows {
 		if r.notation == "4" {
 			m.planView.sel = i
@@ -339,7 +350,10 @@ func TestTreeDoesWhatTheListDoes(t *testing.T) {
 	if m.editCard == nil || m.editCard.ID != a.ID {
 		t.Fatal("E in the tree must edit the selected artefact's card")
 	}
-	m.editCard = nil
+	press(t, m, "esc") // closes the card form, unchanged
+	if m.modal.Open() || m.editCard != nil {
+		t.Fatal("esc must close an unchanged card form")
+	}
 	press(t, m, "esc") // clears the filter, stays in the tree
 	if m.planView == nil || m.filter != "" || len(m.planView.rows) != 4 {
 		t.Fatalf("after esc: %+v", m.planView)
@@ -348,9 +362,9 @@ func TestTreeDoesWhatTheListDoes(t *testing.T) {
 	press(t, m, "j")
 	press(t, m, "l") // opens 3 Health
 	press(t, m, "j") // Assura
-	press(t, m, "c") // place it elsewhere
+	press(t, m, "m") // place it elsewhere
 	if m.planView == nil || m.planView.assign == nil {
-		t.Fatal("c in the tree must open the class picker")
+		t.Fatal("m in the tree must open the class picker")
 	}
 	for i, r := range m.planView.rows {
 		if r.notation == "4" {
@@ -464,7 +478,7 @@ func TestEscGoesBackQQuits(t *testing.T) {
 		"list":   func(m *model) {},
 		"detail": func(m *model) { press(t, m, "enter") },
 		"plans":  func(m *model) { press(t, m, "C") },
-		"assign": func(m *model) { press(t, m, "c") },
+		"assign": func(m *model) { press(t, m, "m") },
 		"keys":   func(m *model) { press(t, m, "?") },
 	}
 	for name, open := range views {
@@ -543,5 +557,161 @@ func TestSelectionFollowsBetweenListAndPlans(t *testing.T) {
 	press(t, m, "esc")
 	if it := m.current(); m.planView != nil || it == nil || it.ID != a.ID {
 		t.Fatalf("the list must come back on Assura: %+v", it)
+	}
+}
+
+func TestReloadOnNewBinary(t *testing.T) {
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}}
+	st, _ := store.Open(cfg, nil, "test")
+	defer st.Close()
+	st.Init()
+	st.Plans().Save([]byte("id: h\ntitle: Household\nsphere: perso\nnodes:\n  - notation: \"3\"\n    label: Health\n"), false)
+	a, _ := st.Put(strings.NewReader("a"), store.PutOptions{Sphere: "perso", Filename: "a.pdf", Title: "Assura"})
+	st.Put(strings.NewReader("b"), store.PutOptions{Sphere: "perso", Filename: "b.pdf", Title: "Bail"})
+	st.SetClass(a.ID, "h", "3", "alain")
+	state := filepath.Join(t.TempDir(), "resume.json")
+	resumePath = func() string { return state }
+	defer func() { resumePath = func() string { return config.Expand("~/.local/state/artefact/tui-resume.json") } }()
+	exe := filepath.Join(t.TempDir(), "artefact")
+	os.WriteFile(exe, []byte("v1"), 0o755)
+	locate := func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil }
+
+	m := newModel(cfg, st, locate)
+	m.w, m.h = 120, 30
+	m.exe = exe
+	m.exeStamp, _ = stampOf(exe)
+	m.build = "0.1.0-dev test"
+	drive(t, m, m.load())
+	m.selectInList(a.URI)
+	m.orphaned = false
+
+	// A rebuild while the user types: a badge, no reload.
+	press(t, m, "/")
+	os.Remove(exe)
+	os.WriteFile(exe, []byte("v2"), 0o755) // new inode, as go install does
+	if cmd := m.checkBinary(); cmd != nil || m.reexec {
+		t.Fatal("reload while typing")
+	}
+	if !strings.Contains(m.header(), "new version") {
+		t.Fatalf("no badge: %s", m.header())
+	}
+	press(t, m, "esc")
+	// At rest, the next check reloads, keeping the state.
+	cmd := m.checkBinary()
+	if cmd == nil || !m.reexec {
+		t.Fatal("no reload at rest")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("the reload must quit to exec the new binary")
+	}
+
+	// The new process picks the state up.
+	t.Setenv(resumeEnv, state)
+	n := newModel(cfg, st, locate)
+	n.w, n.h = 120, 30
+	n.build = "0.1.0-dev test2"
+	n.loadResume()
+	if !strings.Contains(n.status, "reloaded") {
+		t.Fatalf("status %q", n.status)
+	}
+	drive(t, n, n.load())
+	if it := n.current(); it == nil || it.ID != a.ID {
+		t.Fatalf("selection not carried over: %+v", it)
+	}
+	if _, err := os.Stat(state); !os.IsNotExist(err) {
+		t.Error("the resume file must be removed once read")
+	}
+}
+
+func TestConventionKeys(t *testing.T) {
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso", "pro"}}
+	st, _ := store.Open(cfg, nil, "test")
+	defer st.Close()
+	st.Init()
+	a, _ := st.Put(strings.NewReader("a"), store.PutOptions{Sphere: "perso", Filename: "a.pdf", Title: "Assura"})
+	st.Put(strings.NewReader("b"), store.PutOptions{Sphere: "perso", Filename: "b.pdf", Title: "Bail"})
+	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
+	m.w, m.h = 120, 30
+	drive(t, m, m.load())
+
+	press(t, m, "G")
+	press(t, m, "g")
+	if m.sel == 0 {
+		t.Fatal("a single g must wait for the second")
+	}
+	press(t, m, "g")
+	if m.sel != 0 {
+		t.Fatal("gg must go to the top")
+	}
+
+	m.selectInList(a.URI)
+	press(t, m, "x")
+	if l, _ := st.List("perso", index.Filter{State: "archived"}); len(l) != 1 || l[0].ID != a.ID {
+		t.Fatalf("x must archive Assura: %v (%q)", l, m.status)
+	}
+	press(t, m, "4") // archives
+	if !m.archived || len(m.visible()) != 1 {
+		t.Fatalf("view 4: archived %v, %d rows", m.archived, len(m.visible()))
+	}
+	press(t, m, "e") // active again
+	press(t, m, "1")
+	if m.archived || len(m.visible()) != 2 {
+		t.Fatalf("view 1: %d rows", len(m.visible()))
+	}
+	press(t, m, "2")
+	if m.planView == nil {
+		t.Fatal("view 2 must show the plans")
+	}
+	press(t, m, "1")
+
+	f := filepath.Join(t.TempDir(), "scan.pdf")
+	os.WriteFile(f, []byte("%PDF new"), 0o644)
+	press(t, m, "c")
+	if !m.modal.Open() {
+		t.Fatal("c must open the deposit form")
+	}
+	typeText(t, m, f)
+	press(t, m, "ctrl+s")
+	if !m.modal.Open() {
+		t.Fatal("the sphere is required: the form must stay open")
+	}
+	// ctrl+s put the cursor on the missing sphere.
+	press(t, m, "right") // perso
+	press(t, m, "right") // pro
+	press(t, m, "ctrl+s")
+	if l, _ := st.List("pro", index.Filter{}); len(l) != 1 || l[0].Title != "scan" {
+		t.Fatalf("deposit: %v (%q) %s", l, m.status, tuikit.Overlay("", m.modal, 120, 30))
+	}
+
+	m.selectInList(a.URI)
+	press(t, m, "#")
+	if !m.modal.Open() || m.plan == nil {
+		t.Fatalf("# must show the erasure plan: %q", m.status)
+	}
+	press(t, m, "esc")
+}
+
+func TestCardForm(t *testing.T) {
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}}
+	st, _ := store.Open(cfg, nil, "test")
+	defer st.Close()
+	st.Init()
+	a, _ := st.Put(strings.NewReader("a"), store.PutOptions{Sphere: "perso", Filename: "a.pdf", Title: "Assura", Date: "2026-09-03"})
+	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
+	m.w, m.h = 120, 30
+	drive(t, m, m.load())
+	m.selectInList(a.URI)
+	press(t, m, "E")
+	if !m.modal.Open() {
+		t.Fatal("E must open the card form")
+	}
+	typeText(t, m, " 2026")
+	press(t, m, "ctrl+s")
+	st2, _, _ := st.Stat([]string{a.URI}, false)
+	if c := st2[0].Card; c.Title != "Assura 2026" || c.Date != "2026-09-03" {
+		t.Fatalf("card: title %q date %q (%q)", c.Title, c.Date, m.status)
+	}
+	if m.modal.Open() || !strings.Contains(m.status, "card saved") {
+		t.Fatalf("after save: open %v status %q", m.modal.Open(), m.status)
 	}
 }

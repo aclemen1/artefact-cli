@@ -311,7 +311,7 @@ func init() {
 				return nil, err
 			}
 			defer st.Close()
-			return spec.Streamed{}, tui.Run(cfg, st, Locate)
+			return spec.Streamed{}, tui.Run(cfg, st, Locate, actions.Version)
 		},
 	})
 }

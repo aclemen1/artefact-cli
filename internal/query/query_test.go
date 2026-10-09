@@ -7,7 +7,7 @@ import (
 )
 
 func TestParse(t *testing.T) {
-	q, err := Parse(`facture "bail à loyer" -brouillon assura OR css title:décompte type:pdf class:4.2 tag:eve -tag:jeannette after:2024-03 before:2025 is:pending -is:sealed loyer AROUND(5) garantie`)
+	q, err := Parse(`facture "bail à loyer" -brouillon assura OR css title:décompte type:pdf class:4.2 tag:anna -tag:grandma after:2024-03 before:2025 is:pending -is:sealed loyer AROUND(5) garantie`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestParse(t *testing.T) {
 		t.Errorf("nears %+v", q.Nears)
 	}
 	if !reflect.DeepEqual(q.Types, []string{"pdf"}) || !reflect.DeepEqual(q.Classes, []string{"4.2"}) ||
-		!reflect.DeepEqual(q.Tags, []string{"eve"}) || !reflect.DeepEqual(q.NotTags, []string{"jeannette"}) {
+		!reflect.DeepEqual(q.Tags, []string{"anna"}) || !reflect.DeepEqual(q.NotTags, []string{"grandma"}) {
 		t.Errorf("filters %+v", q)
 	}
 	if q.After != "2024-03-01" || q.Before != "2025-01-01" {

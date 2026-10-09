@@ -26,7 +26,7 @@ func TestFindGrammar(t *testing.T) {
 	put(t, s, "Brouillon du bail à loyer", PutOptions{Sphere: "perso", Filename: "brouillon.txt", Title: "Brouillon bail", Date: "2023-01-10"})
 	put(t, s, "Décompte de prestations Assura", PutOptions{Sphere: "perso", Filename: "assura.txt", Title: "Décompte Assura", Date: "2025-04-01"})
 	c := put(t, s, "Décompte CSS assurance", PutOptions{Sphere: "perso", Filename: "css.txt", Title: "Décompte CSS", Date: "2021-06-01"})
-	s.Tag(c.URI, []string{"eve"}, nil)
+	s.Tag(c.URI, []string{"anna"}, nil)
 	off := false
 	o := FindOptions{Semantic: &off}
 
@@ -38,8 +38,8 @@ func TestFindGrammar(t *testing.T) {
 		{`assura OR css`, []string{"Décompte Assura", "Décompte CSS"}},
 		{`title:décompte after:2024`, []string{"Décompte Assura"}},
 		{`décompte year:2021`, []string{"Décompte CSS"}},
-		{`décompte -tag:eve`, []string{"Décompte Assura"}},
-		{`tag:eve`, []string{"Décompte CSS"}},
+		{`décompte -tag:anna`, []string{"Décompte Assura"}},
+		{`tag:anna`, []string{"Décompte CSS"}},
 		{`loyer AROUND(3) garantie`, []string{"Bail"}},
 		{`text:prestations`, []string{"Décompte Assura"}},
 	}

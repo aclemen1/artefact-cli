@@ -43,20 +43,20 @@ func TestTags(t *testing.T) {
 	s := newStore(t)
 	a := put(t, s, "x", PutOptions{Sphere: "perso", Filename: "a.txt"})
 	put(t, s, "y", PutOptions{Sphere: "perso", Filename: "b.txt"})
-	if _, err := s.Tag(a.ID, []string{"avs", "jeannette", "avs"}, nil); err != nil {
+	if _, err := s.Tag(a.ID, []string{"avs", "grandma", "avs"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if l, _ := s.List("", index.Filter{Tag: "avs"}); len(l) != 1 || l[0].ID != a.ID {
 		t.Errorf("ls --tag: %v", l)
 	}
-	if h, _ := s.Search("jeannette", "", 5, "all", Sort{}); len(h) != 1 {
+	if h, _ := s.Search("grandma", "", 5, "all", Sort{}); len(h) != 1 {
 		t.Errorf("search by tag: %v", h)
 	}
 	c, _ := s.Tag(a.ID, nil, []string{"avs"})
-	if len(c.Tags) != 1 || c.Tags[0] != "jeannette" {
+	if len(c.Tags) != 1 || c.Tags[0] != "grandma" {
 		t.Errorf("untag: %v", c.Tags)
 	}
-	if n, _ := s.TagCounts(""); n["jeannette"] != 1 || n["avs"] != 0 {
+	if n, _ := s.TagCounts(""); n["grandma"] != 1 || n["avs"] != 0 {
 		t.Errorf("counts %v", n)
 	}
 }
@@ -69,7 +69,7 @@ func TestMetaRoundTrip(t *testing.T) {
 	var buf bytes.Buffer
 	png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 4, 3)))
 	r := put(t, s, buf.String(), PutOptions{Sphere: "perso", Filename: "photo.png"})
-	if _, err := s.EditCard(r.ID, []string{"title=Plage de La Tour", "date=2024-07-23", "dc.creator=Alain Clément"}, ""); err != nil {
+	if _, err := s.EditCard(r.ID, []string{"title=Beach in summer", "date=2024-07-23", "dc.creator=Jane Doe"}, ""); err != nil {
 		t.Fatal(err)
 	}
 	s.Tag(r.ID, []string{"vacances", "léman"}, nil)
@@ -82,7 +82,7 @@ func TestMetaRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := m.Embedded
-	if e == nil || e.Title != "Plage de La Tour" || e.Date != "2024-07-23" || e.Author != "Alain Clément" || strings.Join(e.Keywords, ",") != "vacances,léman" || e.Width != 4 {
+	if e == nil || e.Title != "Beach in summer" || e.Date != "2024-07-23" || e.Author != "Jane Doe" || strings.Join(e.Keywords, ",") != "vacances,léman" || e.Width != 4 {
 		t.Errorf("embedded %+v", e)
 	}
 	// A deposit takes the content's own date.

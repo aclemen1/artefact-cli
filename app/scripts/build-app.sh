@@ -5,7 +5,7 @@
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-IDENTITY="${ARTEFACT_SIGN_IDENTITY:-Developer ID Application: Alain Clément (BA768YL9DY)}"
+IDENTITY="${ARTEFACT_SIGN_IDENTITY:?set ARTEFACT_SIGN_IDENTITY to your signing identity, e.g. Developer ID Application: Jane Doe (TEAMID)}"
 INSTALL=0
 for arg in "$@"; do
   case "$arg" in

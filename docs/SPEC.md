@@ -79,7 +79,7 @@ A YAML document, one per artefact. The core fields are written by
 ```yaml
 id: 01K9B3T0Z6Q8M2C4R7V1X5N9PA
 sphere: perso
-title: Ordonnance rhumatologie, septembre 2026
+title: Ordonnance, septembre 2026
 date: 2026-09-18              # date of the content, not of the deposit
 mime: application/pdf
 size: 184233

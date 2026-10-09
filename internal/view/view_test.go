@@ -218,10 +218,10 @@ func TestDecomposedNamesResolve(t *testing.T) {
 	defer st.Close()
 	st.Init()
 	st.Plans().Save([]byte("id: h\ntitle: Household\nsphere: perso\nnodes:\n  - notation: \"1\"\n    label: Identité\n"), false)
-	a, _ := st.Put(strings.NewReader("x"), store.PutOptions{Sphere: "perso", Filename: "l.pdf", Title: "Livret Clément"})
+	a, _ := st.Put(strings.NewReader("x"), store.PutOptions{Sphere: "perso", Filename: "l.pdf", Title: "Livret Dupré"})
 	st.SetClass(a.ID, "h", "1", "alain")
 	tr := New(st, "perso")
-	nfd := "plans/h/1 Identité/Livret Clément.pdf" // as macOS sends it
+	nfd := "plans/h/1 Identité/Livret Dupré.pdf" // as macOS sends it
 	if fi, err := tr.Stat(nfd); err != nil || fi.IsDir() {
 		t.Fatalf("decomposed path: %v", err)
 	}

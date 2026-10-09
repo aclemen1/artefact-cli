@@ -285,7 +285,7 @@ func init() {
 			{Name: "tag", Kind: spec.StringList, Help: "Tag to add (repeatable)."},
 			{Name: "untag", Kind: spec.StringList, Help: "Tag to remove (repeatable)."},
 		},
-		Examples: []string{"artefact card 01K9B3T0Z6Q8M2C4R7V1X5N9PA --set title=\"Ordonnance septembre 2026\" --set date=2026-09-18", "artefact card 01K9B3T0Z6Q8M2C4R7V1X5N9PA --set dc.creator=\"Dr X\"", "artefact card 01K9B3T0Z6Q8M2C4R7V1X5N9PA --merge 'x: {mnemo: {note: pour la caisse AVS}}'", "artefact card 01K9B3T0Z6Q8M2C4R7V1X5N9PA --tag jeannette --tag avs --untag brouillon"},
+		Examples: []string{"artefact card 01K9B3T0Z6Q8M2C4R7V1X5N9PA --set title=\"Ordonnance septembre 2026\" --set date=2026-09-18", "artefact card 01K9B3T0Z6Q8M2C4R7V1X5N9PA --set dc.creator=\"Dr X\"", "artefact card 01K9B3T0Z6Q8M2C4R7V1X5N9PA --merge 'x: {mnemo: {note: pour la caisse AVS}}'", "artefact card 01K9B3T0Z6Q8M2C4R7V1X5N9PA --tag grandma --tag avs --untag brouillon"},
 		Effects:  []string{"Rewrites the card and appends a card event. Creates no version."},
 		Run: func(ctx *spec.Context) (any, error) {
 			return run(ctx, func(s *store.Store) (any, error) {
@@ -690,7 +690,7 @@ Grammar:
   title:  file:  text:  card:   the word in this field only (strict); title:"a phrase"
   type:pdf  type:image  type:text  type:audio  type:video  type:docx  type:image/png
   class:4.2  class:perso:4.2  class:banque   in this class or below; a label word finds its classes
-  plan:perso  tag:eve  -tag:eve
+  plan:perso  tag:anna  -tag:anna
   after:2024-03  before:2025  year:2023  date:2026-10   by the content's date
   is:sealed  is:archived  is:active  is:pending  is:orphaned  is:classified  is:unclassified  (-is: negates)
   sphere:perso

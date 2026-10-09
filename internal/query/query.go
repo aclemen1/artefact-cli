@@ -261,7 +261,7 @@ func termOf(t token) (Term, bool, error) {
 	if f, v, ok := field(text); ok && !t.quoted {
 		mapped, isText := Fields[f]
 		if !isText {
-			return Term{}, false, &Error{fmt.Sprintf("%s: cannot be excluded or combined", f), "Exclude words or tags only. Example: -brouillon -tag:eve"}
+			return Term{}, false, &Error{fmt.Sprintf("%s: cannot be excluded or combined", f), "Exclude words or tags only. Example: -brouillon -tag:anna"}
 		}
 		fieldName, text = mapped, v
 	}

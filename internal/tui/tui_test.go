@@ -724,11 +724,11 @@ func TestCardFormTags(t *testing.T) {
 	st.Init()
 	a, _ := st.Put(strings.NewReader("a"), store.PutOptions{Sphere: "perso", Filename: "a.pdf", Title: "Assura"})
 	b, _ := st.Put(strings.NewReader("b"), store.PutOptions{Sphere: "perso", Filename: "b.pdf", Title: "Bail"})
-	st.Tag(b.URI, []string{"eve"}, nil)
+	st.Tag(b.URI, []string{"anna"}, nil)
 	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
 	m.w, m.h = 120, 30
 	drive(t, m, m.load())
-	if got := m.tagCompleter("perso")("ev"); len(got) != 1 || got[0].Value != "eve" {
+	if got := m.tagCompleter("perso")("an"); len(got) != 1 || got[0].Value != "anna" {
 		t.Fatalf("completion: %+v", got)
 	}
 	m.selectInList(a.URI)
@@ -736,11 +736,11 @@ func TestCardFormTags(t *testing.T) {
 	for range 4 { // title, date, file name, type
 		press(t, m, "tab")
 	}
-	typeText(t, m, "eve,")
-	typeText(t, m, "jeannette,")
+	typeText(t, m, "anna,")
+	typeText(t, m, "grandma,")
 	press(t, m, "ctrl+s")
 	st2, _, _ := st.Stat([]string{a.URI}, false)
-	if got := strings.Join(st2[0].Card.Tags, ","); got != "eve,jeannette" {
+	if got := strings.Join(st2[0].Card.Tags, ","); got != "anna,grandma" {
 		t.Fatalf("tags %q (%q)", got, m.status)
 	}
 }

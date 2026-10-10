@@ -355,7 +355,7 @@ func (m *model) assignClass(it store.ListItem, r treeRow) tea.Cmd {
 		return nil
 	}
 	m.planView = m.planView.parent
-	return func() tea.Msg {
+	return m.job("classify "+it.Title, func() doneMsg {
 		res, err := m.st.SetClass(it.URI, r.plan, node, who())
 		if err != nil {
 			return doneMsg{err: err}
@@ -364,7 +364,7 @@ func (m *model) assignClass(it store.ListItem, r treeRow) tea.Cmd {
 			return doneMsg{status: "class removed from " + r.plan, reload: true}
 		}
 		return doneMsg{status: fmt.Sprintf("placed in %s %s (%s)", res.Node, res.Label, r.plan), reload: true}
-	}
+	})
 }
 
 func (m *model) renderPlans() string {

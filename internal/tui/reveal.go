@@ -52,7 +52,7 @@ func (m *model) showInFileManager(it store.ListItem) tea.Cmd {
 		m.setStatus("a sealed artefact is in no view: o decrypts it into a temporary file", true)
 		return nil
 	}
-	return func() tea.Msg {
+	return m.job("show "+it.Title+" in the file manager", func() doneMsg {
 		p, where := viewPath(m.cfg, m.st, it, plan), "view"
 		if p == "" {
 			var err error
@@ -65,7 +65,7 @@ func (m *model) showInFileManager(it store.ListItem) tea.Cmd {
 			return doneMsg{err: err}
 		}
 		return doneMsg{status: fmt.Sprintf("shown in the file manager, from the %s: %s", where, p)}
-	}
+	})
 }
 
 // revealInFileManager opens the file manager on path's folder with path

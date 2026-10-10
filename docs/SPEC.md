@@ -712,7 +712,7 @@ Keys follow the common convention of the ecosystem's TUIs.
 
 | Scope | Keys |
 |---|---|
-| move, views | `j`/`k`, `gg`/`G`, `ctrl+d`/`ctrl+u`; `enter`/`l`/`tab` detail; `esc`/`h` back (never quits); `1` list, `2` plans (`C`), `3` pending (`P`), `4` archives (`A`), `5` orphaned (`O`); `s` sphere; `t`/`T` sort; `/` search; `r` refresh; `R` sync now; `?` help; `q` quit |
+| move, views | `j`/`k`, `gg`/`G`, `ctrl+d`/`ctrl+u`; `enter`/`l`/`tab` detail; `esc`/`h` back (never quits); `1` list, `2` plans (`C`), `3` pending (`P`), `4` archives (`A`), `5` orphaned (`O`); `s` sphere; `t`/`T` sort; `/` search; `r` refresh; `R` sync now; `!` background jobs (tuikit Busy, in the status line; a failure stays red until the list is opened); `?` help; `q` quit |
 | the selected artefact | `o` open read-only, `f` show in the Finder, `E` edit the card, `M` edit the content (next version), `m` place in a class, `e`/`x` archive or make active (reversible), `S` seal, `#` erase (plan and code), `X` erase a held artefact |
 | new | `c` deposit a file: its path, then its sphere when none is in view |
 | plans | `l` open a class, `h` close it or go up, `enter` list a class or show an artefact |

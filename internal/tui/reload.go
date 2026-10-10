@@ -86,7 +86,7 @@ type reloadMsg struct{} // SIGUSR1
 // idle reports whether nothing the user is doing would be lost by a reload.
 func (m *model) idle() bool {
 	return !m.modal.Open() && m.prompt == promptNone && m.editCard == nil && m.toSave == nil && len(m.edits) == 0 &&
-		m.searching == "" && (m.planView == nil || m.planView.assign == nil)
+		m.searching == "" && (m.planView == nil || m.planView.assign == nil) && m.busy.Running() == 0
 }
 
 // checkBinary notes a new binary, and reloads when the TUI is at rest.

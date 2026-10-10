@@ -56,12 +56,12 @@ func (m *model) onModal(msg tea.Msg) (tea.Cmd, bool) {
 				m.setStatus("no note: it was empty", false)
 				return nil, true
 			}
-			return func() tea.Msg {
+			return m.job("note on "+it.Title, func() doneMsg {
 				if err := notes.Add(m.cfg, it.ID, it.Sphere, body); err != nil {
 					return doneMsg{err: err}
 				}
 				return doneMsg{status: "note added", reload: true}
-			}, true
+			}), true
 		case "erase":
 			if m.plan == nil {
 				return nil, true
@@ -121,7 +121,7 @@ func (m *model) deposit(path, sphere, title, date string) tea.Cmd {
 		m.setStatus("sphere "+sphere+" is not one of "+strings.Join(m.spheres, ", "), true)
 		return nil
 	}
-	return func() tea.Msg {
+	return m.job("put "+filepath.Base(path)+" in "+sphere, func() doneMsg {
 		f, err := os.Open(path)
 		if err != nil {
 			return doneMsg{err: err}
@@ -135,7 +135,7 @@ func (m *model) deposit(path, sphere, title, date string) tea.Cmd {
 			return doneMsg{status: "already kept: " + r.Title + " (" + shortID(r.ID) + ")", reload: true}
 		}
 		return doneMsg{status: "deposited in " + sphere + ": " + r.Title + " (" + shortID(r.ID) + ")", reload: true}
-	}
+	})
 }
 
 // edit opens the card in a form (E).

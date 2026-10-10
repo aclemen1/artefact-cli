@@ -35,6 +35,9 @@ func drive(t *testing.T, m *model, cmd tea.Cmd) {
 		if _, isBG := msg.(tea.BackgroundColorMsg); isBG {
 			return
 		}
+		if fmt.Sprintf("%T", msg) == "tuikit.busyTickMsg" {
+			return // the spinner of the jobs
+		}
 		_, next := m.Update(msg)
 		drive(t, m, next)
 	}
@@ -145,16 +148,16 @@ func TestTUI(t *testing.T) {
 	if _, err := st.Resolve(a.ID); err == nil {
 		t.Fatalf("not erased: %s", m.status)
 	}
-	if m.mode != modeList || !strings.Contains(m.status, "erased") {
-		t.Errorf("after erase: mode %v status %q", m.mode, m.status)
+	if b := ansi.Strip(m.busy.View()); m.mode != modeList || !strings.Contains(b, "✓ erased") {
+		t.Errorf("after erase: mode %v busy %q", m.mode, b)
 	}
 
 	// A held artefact needs X.
 	m.sel = 0
 	press(t, m, "enter")
 	press(t, m, "#")
-	if m.plan != nil || !m.statusErr {
-		t.Errorf("x on a held artefact must refuse: %q", m.status)
+	if b := ansi.Strip(m.busy.View()); m.plan != nil || !strings.Contains(b, "✗ plan the erasure") {
+		t.Errorf("x on a held artefact must refuse: %q", b)
 	}
 }
 
@@ -439,7 +442,7 @@ func TestSearchShowsItsPhase(t *testing.T) {
 	press(t, m, "/")
 	typeText(t, m, "quittance")
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.searching != "words" || !strings.Contains(m.footer(), "searching by words") {
+	if m.searching != "words" || !strings.Contains(m.footer(), "search by words: quittance") {
 		t.Fatalf("while searching: %q / %q", m.searching, m.footer())
 	}
 	drive(t, m, cmd)
@@ -712,8 +715,8 @@ func TestCardForm(t *testing.T) {
 	if c := st2[0].Card; c.Title != "Assura 2026" || c.Date != "2026-09-03" {
 		t.Fatalf("card: title %q date %q (%q)", c.Title, c.Date, m.status)
 	}
-	if m.modal.Open() || !strings.Contains(m.status, "card saved") {
-		t.Fatalf("after save: open %v status %q", m.modal.Open(), m.status)
+	if b := ansi.Strip(m.busy.View()); m.modal.Open() || !strings.Contains(b, "✓ card saved") {
+		t.Fatalf("after save: open %v busy %q", m.modal.Open(), b)
 	}
 }
 
@@ -822,5 +825,52 @@ func TestSelectOnStart(t *testing.T) {
 
 	if got := strings.Join(argsWithoutSelect([]string{"artefact", "tui", "--select", "X", "--spheres", "perso", "--select=Y"}), " "); got != "artefact tui --spheres perso" {
 		t.Errorf("args %q", got)
+	}
+}
+
+func TestBusyJobs(t *testing.T) {
+	cfg := &config.Config{Store: t.TempDir(), Spheres: []string{"perso"}}
+	st, _ := store.Open(cfg, nil, "test")
+	defer st.Close()
+	st.Init()
+	st.Put(strings.NewReader("a"), store.PutOptions{Sphere: "perso", Filename: "a.pdf", Title: "Assura"})
+	m := newModel(cfg, st, func(*config.Config, *store.Store, string) (string, string, error) { return "", "", nil })
+	m.w, m.h = 120, 30
+	drive(t, m, m.load())
+	// A job under way shows in the status line.
+	release := make(chan struct{})
+	pending := m.job("sync perso", func() doneMsg { <-release; return doneMsg{status: "synced"} })
+	if f := ansi.Strip(m.footer()); !strings.Contains(f, "sync perso") {
+		t.Fatalf("running job not shown:\n%s", f)
+	}
+	close(release)
+	drive(t, m, pending)
+	// A failure stays in red, with ! in the help line, until the list is opened.
+	drive(t, m, m.job("classify Assura", func() doneMsg { return doneMsg{err: fmt.Errorf("no such class")} }))
+	f := ansi.Strip(m.footer())
+	if !strings.Contains(f, "✗ classify Assura : no such class") || !strings.Contains(f, "! jobs") {
+		t.Fatalf("failure not shown:\n%s", f)
+	}
+	press(t, m, "j")
+	if !strings.Contains(ansi.Strip(m.footer()), "✗ classify Assura") {
+		t.Fatal("the failure goes away before the list is opened")
+	}
+	// ! opens the list, which marks the failure as read.
+	press(t, m, "!")
+	if !m.modal.Open() || m.busy.Unread() != 0 {
+		t.Fatalf("! opens the jobs: open %v, unread %d", m.modal.Open(), m.busy.Unread())
+	}
+	if v := ansi.Strip(m.View().Content); !strings.Contains(v, "no such class") || !strings.Contains(v, "sync perso → synced") {
+		t.Fatalf("jobs list:\n%s", v)
+	}
+	press(t, m, "esc")
+	if m.modal.Open() || strings.Contains(ansi.Strip(m.footer()), "✗") {
+		t.Fatal("esc closes the list; the failure read leaves the status line")
+	}
+	// While typing in a modal, ! is a character.
+	press(t, m, "c")
+	press(t, m, "!")
+	if v := ansi.Strip(m.View().Content); !strings.Contains(v, "Deposit a file") || strings.Contains(v, "sync perso") {
+		t.Fatalf("! during an input must not open the jobs:\n%s", v)
 	}
 }

@@ -46,7 +46,7 @@ func (m *model) itemKey(key string, it store.ListItem, inTree bool) (tea.Cmd, bo
 	case "e", "x", "a":
 		toArchive := it.Archived == ""
 		id := it.URI
-		return func() tea.Msg {
+		return m.job(archiveLabel(toArchive, it.Title), func() doneMsg {
 			if _, err := m.st.Archive(id, toArchive, "tui"); err != nil {
 				return doneMsg{err: err}
 			}
@@ -54,7 +54,7 @@ func (m *model) itemKey(key string, it store.ListItem, inTree bool) (tea.Cmd, bo
 				return doneMsg{status: "archived (x or e again makes it active)", reload: true}
 			}
 			return doneMsg{status: "active again", reload: true}
-		}, true
+		}), true
 	case "S":
 		if it.Sealed {
 			m.setStatus("already sealed", false)
@@ -66,10 +66,10 @@ func (m *model) itemKey(key string, it store.ListItem, inTree bool) (tea.Cmd, bo
 		force := key == "X"
 		m.force = force
 		id := it.URI
-		return func() tea.Msg {
+		return m.wrap("plan the erasure of "+it.Title, func() tea.Msg {
 			p, err := m.st.PlanErase(store.EraseRequest{Refs: []string{id}, Force: force})
 			return planMsg{p, err}
-		}, true
+		}), true
 	}
 	return nil, false
 }
@@ -102,8 +102,7 @@ func (m *model) goView(key string) tea.Cmd {
 // syncNow copies to the backends what is not there yet, now.
 func (m *model) syncNow() tea.Cmd {
 	sphere := m.sphere
-	m.setStatus("sync started…", false)
-	return func() tea.Msg {
+	return m.job("sync"+sphereSuffix(sphere), func() doneMsg {
 		res, err := m.st.Sync(context.Background(), sphere, false)
 		if err != nil {
 			return doneMsg{err: err}
@@ -116,5 +115,5 @@ func (m *model) syncNow() tea.Cmd {
 			}
 		}
 		return doneMsg{status: fmt.Sprintf("synced: %d file(s) sent, %d error(s)", sent, errs)}
-	}
+	})
 }

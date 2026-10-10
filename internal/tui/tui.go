@@ -119,7 +119,6 @@ type model struct {
 	startInPlans bool              // the last session ended in the plans tree
 	searching    string            // the phase of the search that runs: words, meaning; "" when none
 	searchSeq    int               // the search whose results are awaited
-	spin         int               // the spinner's frame
 	versions     map[string]int64  // index versions last seen, by sphere
 	signatures   map[string]string // artefact count and last card change, by sphere
 	stale        bool              // another process changed the store; reload when free
@@ -136,6 +135,8 @@ type model struct {
 	resumed      *resume           // state carried over a reload, applied once the list is read
 	classFilter  treeRow           // list filtered on a class (plan "" for none)
 	revealed     []string          // decrypted temporary files, deleted on quit
+	busy         *tuikit.Busy      // the background jobs, shown in the header; ! lists them
+	ended        *ended            // jobs ended, whose reload or back is still to apply
 
 	w, h      int
 	status    string
@@ -148,7 +149,7 @@ func newModel(cfg *config.Config, st *store.Store, locate Locator) *model {
 	styles := in.Styles()
 	styles.Cursor.Blink = false
 	in.SetStyles(styles)
-	return &model{cfg: cfg, st: st, locate: locate, spheres: st.Spheres, input: in, w: 100, h: 30, copies: map[string]store.CopyState{}, edits: map[string]*edit{}, treeOpen: map[string]bool{}}
+	return &model{cfg: cfg, st: st, locate: locate, spheres: st.Spheres, input: in, w: 100, h: 30, copies: map[string]store.CopyState{}, edits: map[string]*edit{}, treeOpen: map[string]bool{}, busy: tuikit.NewBusy(), ended: &ended{}}
 }
 
 // ------------------------------------------------------------------ data
@@ -181,7 +182,6 @@ type (
 		next   tea.Cmd // the search by meaning, after the words
 		err    error
 	}
-	spinMsg   struct{}
 	tickMsg   struct{}
 	copiesMsg struct {
 		states   map[string]store.CopyState
@@ -214,7 +214,7 @@ func (m *model) load() tea.Cmd {
 }
 
 func (m *model) loadDetail(id string) tea.Cmd {
-	return func() tea.Msg {
+	cmd := func() tea.Msg {
 		st, missing, err := m.st.Stat([]string{id}, true)
 		if err == nil && len(missing) > 0 {
 			err = fmt.Errorf("artefact %s is gone", id)
@@ -228,6 +228,10 @@ func (m *model) loadDetail(id string) tea.Cmd {
 		}
 		return detailMsg{st: &st[0]}
 	}
+	if notes.Configured(m.cfg) {
+		return m.wrap("read the notes of "+shortID(id), cmd) // an outside tool
+	}
+	return cmd
 }
 
 // visible is the list once the text filter applies.
@@ -304,6 +308,16 @@ func (m *model) refreshCopies() tea.Cmd {
 }
 
 func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if cmd, ok := m.busy.Update(msg); ok {
+		return m, tea.Batch(cmd, m.afterJobs())
+	}
+	if f, ok := msg.(failedMsg); ok {
+		// Busy shows the failure; the view takes the message, without a status.
+		status, isErr := m.status, m.statusErr
+		next, cmd := m.update(f.inner)
+		m.status, m.statusErr = status, isErr
+		return next, cmd
+	}
 	if cmd, ok := m.onModal(msg); ok {
 		return m, cmd
 	}
@@ -431,16 +445,10 @@ func (m *model) updateBase(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setStatus(msg.note, false)
 		if msg.phase == "words" && msg.next != nil {
 			m.searching = "meaning"
-			return m, tea.Batch(m.refreshCopies(), msg.next)
+			return m, tea.Batch(m.refreshCopies(), m.wrap("search by meaning: "+m.filter, msg.next))
 		}
 		m.searching = ""
 		return m, m.refreshCopies()
-	case spinMsg:
-		if m.searching == "" {
-			return m, nil
-		}
-		m.spin++
-		return m, spin()
 	case detailMsg:
 		if msg.err != nil {
 			m.setStatus(msg.err.Error(), true)
@@ -450,25 +458,7 @@ func (m *model) updateBase(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detail = msg.st
 		return m, nil
 	case doneMsg:
-		if msg.err != nil {
-			m.setStatus(msg.err.Error(), true)
-		} else {
-			m.setStatus(msg.status, false)
-		}
-		var cmds []tea.Cmd
-		if msg.back {
-			m.mode, m.detail = modeList, nil
-		}
-		if msg.reload {
-			cmds = append(cmds, m.load())
-			if m.planView != nil {
-				cmds = append(cmds, m.loadPlans())
-			}
-			if m.mode == modeDetail && m.detail != nil {
-				cmds = append(cmds, m.loadDetail(m.detail.Card.ID))
-			}
-		}
-		return m, tea.Batch(cmds...)
+		return m, m.onDone(msg, true)
 	case planMsg:
 		if msg.err != nil {
 			m.setStatus(msg.err.Error(), true)
@@ -501,6 +491,9 @@ func (m *model) updateBase(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "?" {
 			m.legend, m.legendAt = true, 0
 			return m, nil
+		}
+		if msg.String() == tuikit.BusyKey {
+			return m, m.openJobs()
 		}
 		if m.mode == modeDetail {
 			return m, m.keyDetail(msg)
@@ -605,7 +598,7 @@ func (m *model) keyList(k tea.KeyPressMsg) tea.Cmd {
 		m.setStatus("sorted by "+m.orderLabel(), false)
 	case "r":
 		m.filter, m.searched, m.classFilter = "", false, treeRow{}
-		return m.load()
+		return m.wrap("refresh", m.load())
 	case "C":
 		if m.classFilter.plan != "" {
 			m.classFilter, m.sel = treeRow{}, 0
@@ -710,12 +703,12 @@ func (m *model) openPath(p, mime, from string) tea.Cmd {
 			return doneMsg{status: "read in the editor, read-only, from the " + from + " (e edits the content)"}
 		})
 	}
-	return func() tea.Msg {
+	return m.job("open "+filepath.Base(p), func() doneMsg {
 		if err := exec.Command("open", p).Run(); err != nil {
 			return doneMsg{err: err}
 		}
 		return doneMsg{status: "opened from the " + from}
-	}
+	})
 }
 
 // readsAsText reports whether a payload reads best in a text editor.
@@ -822,12 +815,12 @@ func (m *model) saveCard(cur *store.Card, after editable) tea.Cmd {
 		return nil
 	}
 	id := cur.ID
-	return func() tea.Msg {
+	return m.job("save the card of "+cur.Title, func() doneMsg {
 		if _, err := m.st.EditCard(id, sets, doc); err != nil {
 			return doneMsg{err: err}
 		}
 		return doneMsg{status: "card saved", reload: true}
-	}
+	})
 }
 
 // ------------------------------------------------------------------ view
@@ -1124,6 +1117,9 @@ func (m *model) footer() string {
 	default:
 		help = helpLine("enter", "detail", "o", "open", "f", "finder", "E/M", "card/content", "m", "classify", "x", "archive", "c", "new", "2", "plans", "/", "search", "t/T", "sort", "esc", "back", "?", "keys", "q", "quit")
 	}
+	if m.prompt == promptNone && m.busy.Unread() > 0 {
+		help = helpLine(tuikit.BusyKey, "jobs") + sMuted.Render(" · ") + help
+	}
 	status := ""
 	if m.status != "" {
 		st := sOK
@@ -1132,13 +1128,8 @@ func (m *model) footer() string {
 		}
 		status = st.Render(m.status)
 	}
-	if m.searching != "" {
-		phase := "searching by words…"
-		if m.searching == "meaning" {
-			phase = "searching by meaning…"
-		}
-		frame := spinFrames[m.spin%len(spinFrames)]
-		status = sWarn.Render(frame+" "+phase) + "  " + status
+	if b := m.busy.View(); b != "" {
+		status = strings.TrimSpace(b + "   " + status)
 	}
 	return pad(status, m.w) + "\n" + pad(help, m.w)
 }
@@ -1194,7 +1185,7 @@ func (m *model) legendLines() []string {
 			{"t  T", "sort the artefacts of each class; classes keep the order of their notation"},
 		}},
 		{"Detail", [][2]string{{"j k  J K", "scroll"}}},
-		{"Everywhere", [][2]string{{"?", "these keys"}, {"esc", "back to the previous view; never quits"}, {"q  ctrl+c", "quit, from any view (in a field, q is typed)"}}},
+		{"Everywhere", [][2]string{{"?", "these keys"}, {tuikit.BusyKey, "background jobs: sync, deposits, searches, classes, opening…; a failure stays red in the status line until this list is opened"}, {"esc", "back to the previous view; never quits"}, {"q  ctrl+c", "quit, from any view (in a field, q is typed)"}}},
 	} {
 		section(theme.title)
 		for _, kv := range theme.keys {
@@ -1333,12 +1324,12 @@ func (m *model) editContent(c *store.Card) tea.Cmd {
 		cmd := exec.Command("sh", "-c", editorCommand()+` "$1"`, "sh", p)
 		return tea.ExecProcess(cmd, func(err error) tea.Msg { return editedContentMsg{id: c.ID, err: err} })
 	}
-	return func() tea.Msg {
+	return m.job("open "+name+" to edit", func() doneMsg {
 		if err := exec.Command("open", p).Run(); err != nil {
 			return doneMsg{err: err}
 		}
 		return doneMsg{status: "editing " + name + " in its application; save there, and the TUI offers a new version"}
-	}
+	})
 }
 
 // askRevise asks whether a changed copy becomes the next version.
@@ -1474,7 +1465,7 @@ func (m *model) onVersions(v versionsMsg) tea.Cmd {
 		return nil
 	}
 	m.stale = false
-	cmds := []tea.Cmd{m.load()}
+	cmds := []tea.Cmd{m.wrap("reload: the store changed", m.load())}
 	if m.planView != nil {
 		cmds = append(cmds, m.loadPlans())
 	}
@@ -1484,14 +1475,8 @@ func (m *model) onVersions(v versionsMsg) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-
-func spin() tea.Cmd {
-	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg { return spinMsg{} })
-}
-
 // startSearch searches by words first, which answers at once, then by
-// meaning when a sphere has its index; the status line shows the phase.
+// meaning when a sphere has its index; Busy shows the phase.
 func (m *model) startSearch(q, sphere, state string) tea.Cmd {
 	m.searchSeq++
 	seq := m.searchSeq
@@ -1526,7 +1511,7 @@ func (m *model) startSearch(q, sphere, state string) tea.Cmd {
 		}
 		return msg
 	}
-	return tea.Batch(func() tea.Msg { return run("words", &off) }, spin())
+	return m.wrap("search by words: "+q, func() tea.Msg { return run("words", &off) })
 }
 
 // meaningApplies tells whether a search by meaning would add anything: the
@@ -1579,14 +1564,14 @@ func (m *model) finish(p prompt, val string) tea.Cmd {
 			m.setStatus("not saved; the copy stays at "+e.path, false)
 			return nil
 		}
-		return func() tea.Msg {
+		return m.job("save "+e.name+" as a new version", func() doneMsg {
 			r, err := m.st.Revise(e.id, e.path)
 			if err != nil {
 				return doneMsg{err: err}
 			}
 			e.seen, e.sum = e.mtime(), sumFile(e.path)
 			return doneMsg{status: fmt.Sprintf("saved as version v%d", r.Version), reload: true}
-		}
+		})
 	case promptReveal:
 		req := m.reveal
 		m.reveal = nil
@@ -1606,13 +1591,13 @@ func (m *model) finish(p prompt, val string) tea.Cmd {
 			return nil
 		}
 		id := m.target
-		return func() tea.Msg {
+		return m.job("seal "+shortID(id), func() doneMsg {
 			r, err := m.st.Seal(id)
 			if err != nil {
 				return doneMsg{err: err}
 			}
 			return doneMsg{status: fmt.Sprintf("sealed; %d clear version(s) erased", r.VersionsErased), reload: true}
-		}
+		})
 	case promptErase:
 		plan := m.plan
 		m.plan = nil
@@ -1620,7 +1605,7 @@ func (m *model) finish(p prompt, val string) tea.Cmd {
 			m.setStatus("erasure cancelled: the code was not typed", false)
 			return nil
 		}
-		return func() tea.Msg {
+		return m.job("erase", func() doneMsg {
 			proof, err := m.st.ConfirmErase(plan.Code)
 			if err != nil {
 				return doneMsg{err: err}
@@ -1632,7 +1617,7 @@ func (m *model) finish(p prompt, val string) tea.Cmd {
 				}
 			}
 			return doneMsg{status: fmt.Sprintf("erased; %d location(s) purged and verified", ok), reload: true, back: true}
-		}
+		})
 	}
 	return nil
 }

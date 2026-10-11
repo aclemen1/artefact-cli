@@ -4,16 +4,15 @@ import (
 	"context"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/aclemen1/jev"
 	"gopkg.in/yaml.v3"
 
 	"github.com/aclemen1/artefact-cli/internal/classify"
-	"github.com/aclemen1/artefact-cli/internal/config"
 	"github.com/aclemen1/artefact-cli/internal/index"
 )
 
@@ -33,47 +32,34 @@ func (s *Store) loadPlan(id, sphere string) (*classify.Plan, error) {
 	return p, nil
 }
 
+// jevClient opens the jev client once (~/.config/jev/config.yaml); Close releases it.
+func (s *Store) jevClient() (*jev.Client, error) {
+	if s.Jev != nil {
+		return s.Jev, nil
+	}
+	c, err := jev.Load()
+	if err != nil {
+		return nil, userErr("%v", err)
+	}
+	s.Jev = c
+	return c, nil
+}
+
 // Decider builds the named decider from the configuration.
 func (s *Store) Decider(name string) (classify.Decider, error) {
 	if name == "" {
 		name = s.Cfg.Classify.Decider
 	}
 	switch name {
-	case "", "openjev":
-		url := s.Cfg.Classify.Deciders.OpenJev.URL
-		if url == "" {
-			url = "http://127.0.0.1:3000"
+	case "", "openjev", "jev":
+		c, err := s.jevClient()
+		if err != nil {
+			return nil, err
 		}
-		return classify.OpenJev{URL: url, Model: s.Cfg.Classify.Deciders.OpenJev.Model, Key: os.Getenv("JEV_API_KEY")}, nil
-	case "jev":
-		key := os.Getenv("JEV_API_KEY")
-		if kc := s.Cfg.Classify.Deciders.Jev.KeyCommand; key == "" && len(kc) > 0 {
-			args := make([]string, len(kc))
-			for i, a := range kc {
-				args[i] = config.Expand(a)
-			}
-			out, err := exec.Command(args[0], args[1:]...).Output()
-			if err != nil {
-				return nil, userErr("classify.deciders.jev.key_command failed: %v", err)
-			}
-			key = strings.TrimSpace(string(out))
+		if name == "jev" {
+			return &classify.Jev{Client: c}, nil // Jev, then OpenJev on refusal
 		}
-		if key == "" {
-			out, err := exec.Command("security", "find-generic-password", "-s", "artefact", "-a", "jev", "-w").Output()
-			if err != nil {
-				return nil, userErr("the jev decider needs a TypeSafe API key: $JEV_API_KEY, classify.deciders.jev.key_command, or the keychain (service artefact, account jev)")
-			}
-			key = strings.TrimSpace(string(out))
-		}
-		url := s.Cfg.Classify.Deciders.Jev.URL
-		if url == "" {
-			url = "https://api.typesafe.ai"
-		}
-		model := s.Cfg.Classify.Deciders.Jev.Model
-		if model == "" {
-			model = "jev-latest"
-		}
-		return classify.OpenJev{URL: url, Model: model, Key: key, Label: "jev"}, nil
+		return &classify.Jev{Client: c, Only: "openjev"}, nil
 	case "acp":
 		return classify.ACP{Command: s.Cfg.Classify.Deciders.ACP.Command}, nil
 	case "rule":

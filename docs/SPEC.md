@@ -523,7 +523,8 @@ A decider answers: which child of this node does the artefact belong to?
 | Decider | Through | Notes |
 |---|---|---|
 | `rule` | the plan's `rules` (`mime` glob, `filename` and `title` regular expressions) | tried first whatever the decider; the deepest matching node wins |
-| `openjev` | `POST <url>/v1/systemone`, one `choice` question whose `criteria` are the children (label: scope) and `none` | default; `classify.deciders.openjev.url`; with `$JEV_API_KEY`, the same request reaches the hosted Jev |
+| `openjev` | `POST /v1/systemone` through the module `github.com/aclemen1/jev`, one `choice` question whose `criteria` are the children (label: scope) and `none` | default; the local OpenJev of `~/.config/jev/config.yaml`, started on demand |
+| `jev` | the same request, to the providers of `~/.config/jev/config.yaml` in order: Jev, then OpenJev | a refusal for credit or key alerts and falls back; the class records the provider that answered (`decider:openjev`) |
 | `acp` | one prompt in a new ACP session (`classify.deciders.acp.command`, e.g. `[herdr-acp, --agent, claude]`) | the agent may read the file (read permissions only); it answers one line of JSON |
 
 - What a decider sees (`Facts`): file name, title, type, date, the card's
@@ -858,7 +859,6 @@ classify:
   decider: openjev
   threshold: 0.8
   deciders:
-    openjev: { url: http://127.0.0.1:3000 }
     acp:     { command: [herdr-acp, --agent, claude] }
 lector: { command: [lector] }
 serve: { http: 127.0.0.1:7780, socket: ~/.local/state/artefact/sock }

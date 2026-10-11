@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aclemen1/jev"
 	"github.com/oklog/ulid/v2"
 
 	"github.com/aclemen1/artefact-cli/internal/backend"
@@ -45,6 +46,7 @@ type Store struct {
 	Agent   string   // who acts, written in events
 	Now     func() time.Time
 	Keys    keys.Source
+	Jev     *jev.Client // opened on the first jev or openjev decision; released by Close
 
 	indexes  map[string]*index.Index
 	backends map[string]*backend.Backend
@@ -69,6 +71,9 @@ func Open(cfg *config.Config, spheres []string, agent string) (*Store, error) {
 func (s *Store) Close() {
 	for _, x := range s.indexes {
 		x.Close()
+	}
+	if s.Jev != nil {
+		s.Jev.Close()
 	}
 }
 

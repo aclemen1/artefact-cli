@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aclemen1/artefact-cli/internal/index"
+	"github.com/aclemen1/jev"
 )
 
 const planYAML = `id: household
@@ -70,13 +73,28 @@ func fakeJev(t *testing.T, confidence float64) *httptest.Server {
 	}))
 }
 
+// testJev is a jev client whose only provider, openjev, is the fake server.
+func testJev(t *testing.T, url string) *jev.Client {
+	t.Helper()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "jev.yaml")
+	os.WriteFile(p, []byte("providers:\n  - {name: openjev, url: "+url+"/v1/systemone, model: openjev}\nstate_dir: "+dir+"\n"), 0o644)
+	cfg, err := jev.LoadConfig(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := jev.New(cfg)
+	t.Cleanup(func() { c.Close() })
+	return c
+}
+
 func withPlan(t *testing.T, jevURL string) *Store {
 	t.Helper()
 	s := newStore(t)
 	if _, err := s.Plans().Save([]byte(planYAML), false); err != nil {
 		t.Fatal(err)
 	}
-	s.Cfg.Classify.Deciders.OpenJev.URL = jevURL
+	s.Jev = testJev(t, jevURL)
 	return s
 }
 
@@ -162,7 +180,7 @@ func TestSealedArtefactGivesItsCardOnly(t *testing.T) {
 	defer srv.Close()
 	s := sealedStore(t)
 	s.Plans().Save([]byte(planYAML), false)
-	s.Cfg.Classify.Deciders.OpenJev.URL = srv.URL
+	s.Jev = testJev(t, srv.URL)
 	a := put(t, s, "TOPSECRET health insurance", PutOptions{Sphere: "perso", Filename: "s.txt", Title: "Carte", Seal: true})
 	if _, err := s.Classify(context.Background(), a.ID, "household", ""); err != nil {
 		t.Fatal(err)
@@ -295,5 +313,29 @@ func TestWhich(t *testing.T) {
 	}
 	if l, _ := s.List("", index.Filter{}); len(l) != 2 {
 		t.Errorf("which must write nothing: %d artefacts", len(l))
+	}
+}
+
+func TestJevDeciderFallsBackToOpenJev(t *testing.T) {
+	local := fakeJev(t, 0.95)
+	defer local.Close()
+	refused := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(402)
+		w.Write([]byte(`{"detail":{"error_type":"payment_required","message":"Insufficient credit"}}`))
+	}))
+	defer refused.Close()
+	s := withPlan(t, local.URL)
+	dir := t.TempDir()
+	p := filepath.Join(dir, "jev.yaml")
+	os.WriteFile(p, []byte("providers:\n  - {name: jev, url: "+refused.URL+"/v1/systemone, model: jev-latest}\n  - {name: openjev, url: "+local.URL+"/v1/systemone, model: openjev}\nstate_dir: "+dir+"\n"), 0o644)
+	cfg, _ := jev.LoadConfig(p)
+	s.Jev, _ = jev.New(cfg)
+	a := put(t, s, "Assura: statements of health insurance claims", PutOptions{Sphere: "perso", Filename: "d.txt"})
+	r, err := s.Classify(context.Background(), a.ID, "household", "jev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Node != "3.2" || r.By != "decider:openjev" {
+		t.Fatalf("fallback: %+v", r)
 	}
 }

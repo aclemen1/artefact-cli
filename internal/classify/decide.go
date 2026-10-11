@@ -1,14 +1,12 @@
 package classify
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
@@ -16,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aclemen1/jev"
 	acp "github.com/coder/acp-go-sdk"
 )
 
@@ -66,23 +65,30 @@ func state(q Question) string {
 	return b.String()
 }
 
-// OpenJev asks a /v1/systemone server (OpenJev, or Jev with a key).
-type OpenJev struct {
-	Label string // decider name in the records; default openjev
-	URL   string // e.g. http://127.0.0.1:3000
-	Key   string // bearer token, for the hosted Jev
-	Model string
-	HTTP  *http.Client
+// Jev asks /v1/systemone through the jev module: its providers in order
+// (Jev, then OpenJev on refusal), or one provider only.
+type Jev struct {
+	Client *jev.Client
+	Only   string // a provider of the jev configuration, e.g. openjev; "" for all, in order
+
+	mu   sync.Mutex
+	used string
 }
 
-func (o OpenJev) Name() string {
-	if o.Label != "" {
-		return o.Label
+// Name is the provider that gave the last answer: decider:openjev when Jev fell back.
+func (o *Jev) Name() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	switch {
+	case o.used != "":
+		return o.used
+	case o.Only != "":
+		return o.Only
 	}
-	return "openjev"
+	return "jev"
 }
 
-func (o OpenJev) Decide(ctx context.Context, q Question) (Answer, error) {
+func (o *Jev) Decide(ctx context.Context, q Question) (Answer, error) {
 	criteria := map[string]string{}
 	for _, c := range q.Candidates {
 		d := c.Label
@@ -92,50 +98,21 @@ func (o OpenJev) Decide(ctx context.Context, q Question) (Answer, error) {
 		criteria[c.Key] = d
 	}
 	criteria[noneKey] = "None of these classes fits the file."
-	model := o.Model
-	if model == "" {
-		model = "openjev"
-	}
-	body, _ := json.Marshal(map[string]any{
-		"state": state(q), "model": model,
-		"questions": map[string]any{"node": map[string]any{"type": "choice", "instructions": instructions(q), "criteria": criteria}},
+	res, provider, err := o.Client.Ask(ctx, jev.Request{
+		State:     state(q),
+		Questions: map[string]any{"node": map[string]any{"type": "choice", "instructions": instructions(q), "criteria": criteria}},
+		Only:      o.Only,
 	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(o.URL, "/")+"/v1/systemone", bytes.NewReader(body))
 	if err != nil {
 		return Answer{}, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if o.Key != "" {
-		req.Header.Set("Authorization", "Bearer "+o.Key)
+	var a Answer
+	if err := res.Decode("node", &a); err != nil {
+		return Answer{}, fmt.Errorf("%s: %w", provider, err)
 	}
-	hc := o.HTTP
-	if hc == nil {
-		hc = &http.Client{Timeout: 2 * time.Minute}
-	}
-	resp, err := hc.Do(req)
-	if err != nil {
-		return Answer{}, fmt.Errorf("%s at %s: %w (is the server reachable?)", o.Name(), o.URL, err)
-	}
-	defer resp.Body.Close()
-	var out struct {
-		Answers map[string]Answer `json:"answers"`
-		Error   *struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return Answer{}, fmt.Errorf("openjev: unreadable answer (HTTP %d): %w", resp.StatusCode, err)
-	}
-	if out.Error != nil {
-		return Answer{}, fmt.Errorf("%s: %s", o.Name(), out.Error.Message)
-	}
-	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
-		return Answer{}, fmt.Errorf("%s: HTTP %d", o.Name(), resp.StatusCode)
-	}
-	a, ok := out.Answers["node"]
-	if !ok {
-		return Answer{}, fmt.Errorf("openjev: no answer (HTTP %d)", resp.StatusCode)
-	}
+	o.mu.Lock()
+	o.used = provider
+	o.mu.Unlock()
 	return a, nil
 }
 

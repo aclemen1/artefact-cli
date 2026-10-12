@@ -121,8 +121,8 @@ func TestClassifyWalk(t *testing.T) {
 		t.Errorf("none at the top must be pending: %+v", r)
 	}
 
-	// A human decision is kept.
-	if _, err := s.SetClass(ins.ID, "household", "3.1", "alain"); err != nil {
+	// A decision by hand is kept.
+	if _, err := s.SetClass(ins.ID, "household", "3.1", "agent:office-P-0019"); err != nil {
 		t.Fatal(err)
 	}
 	if r, _ := s.Classify(ctx, ins.ID, "household", ""); r.Status != "kept_human" || r.Node != "3.1" {
@@ -146,11 +146,11 @@ func TestClassifyWalk(t *testing.T) {
 		t.Errorf("classes after reindex: %d", len(l))
 	}
 	st, _, _ := s.Stat([]string{ins.ID}, true)
-	if c := st[0].Card.Classes["household"]; c.By != "human:alain" {
+	if c := st[0].Card.Classes["household"]; c.By != "agent:office-P-0019" {
 		t.Errorf("card class %+v", c)
 	}
 	last := st[0].Events[len(st[0].Events)-1]
-	if last.Type != "classify" {
+	if last.Type != "classify" || last.Detail["by"] != "agent:office-P-0019" {
 		t.Errorf("last event %+v", last)
 	}
 }
@@ -337,5 +337,16 @@ func TestJevDeciderFallsBackToOpenJev(t *testing.T) {
 	}
 	if r.Node != "3.2" || r.By != "decider:openjev" {
 		t.Fatalf("fallback: %+v", r)
+	}
+}
+
+func TestByHand(t *testing.T) {
+	for by, want := range map[string]bool{
+		"human:alain": true, "human:AC@tui": true, "agent:greffier": true, "routine:brief": true, "unknown:cli": true,
+		"decider:openjev": false, "rule:4": false, "rule": false, "": false,
+	} {
+		if ByHand(by) != want {
+			t.Errorf("ByHand(%q) = %v", by, !want)
+		}
 	}
 }

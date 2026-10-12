@@ -88,11 +88,13 @@ func (m *model) openJobs() tea.Cmd {
 // onDone reports a finished action (when report) and reloads what it changed.
 func (m *model) onDone(msg doneMsg, report bool) tea.Cmd {
 	switch {
+	case !report && msg.say:
+		m.setStatus(msg.status, msg.warn)
 	case !report:
 	case msg.err != nil:
 		m.setStatus(msg.err.Error(), true)
 	default:
-		m.setStatus(msg.status, false)
+		m.setStatus(msg.status, msg.warn)
 	}
 	var cmds []tea.Cmd
 	if msg.back {

@@ -139,7 +139,7 @@ func (s *Store) Classify(ctx context.Context, ref, planID, deciderName string) (
 		return nil, err
 	}
 	res := &ClassifyResult{URI: URI(r.Sphere, r.ID), Plan: p.ID}
-	if k, ok := c.Classes[p.ID]; ok && strings.HasPrefix(k.By, "human:") {
+	if k, ok := c.Classes[p.ID]; ok && ByHand(k.By) {
 		res.Status, res.Node, res.By, res.Confidence = "kept_human", k.Node, k.By, k.Confidence
 		return res, nil
 	}
@@ -181,7 +181,7 @@ func (s *Store) Classify(ctx context.Context, ref, planID, deciderName string) (
 	if len(res.Steps) > 0 {
 		detail["steps"] = res.Steps
 	}
-	if err := appendEvent(r.Dir, Event{At: at, Type: "classify", Agent: s.Agent, Outcome: "ok", Detail: detail}); err != nil {
+	if err := appendEvent(r.Dir, Event{At: at, Type: "classify", Agent: s.Agent, By: s.By, Outcome: "ok", Detail: detail}); err != nil {
 		return nil, err
 	}
 	if err := s.saveCard(r, c, at); err != nil {
@@ -197,8 +197,18 @@ func (s *Store) Classify(ctx context.Context, ref, planID, deciderName string) (
 	return res, nil
 }
 
-// SetClass records a human decision; an empty node removes the class.
-func (s *Store) SetClass(ref, planID, node, who string) (*ClassifyResult, error) {
+// ByHand reports whether a class was set by an actor (human, agent or
+// routine), not by a decider or a rule: a decider never overwrites it.
+func ByHand(by string) bool {
+	return by != "" && by != "rule" && !strings.HasPrefix(by, "decider:") && !strings.HasPrefix(by, "rule:")
+}
+
+// SetClass records a decision by hand, signed by (the actor); an empty node
+// removes the class.
+func (s *Store) SetClass(ref, planID, node, by string) (*ClassifyResult, error) {
+	if by == "" {
+		by = "unknown:cli"
+	}
 	r, err := s.Resolve(ref)
 	if err != nil {
 		return nil, err
@@ -231,10 +241,10 @@ func (s *Store) SetClass(ref, planID, node, who string) (*ClassifyResult, error)
 		if c.Classes == nil {
 			c.Classes = map[string]Class{}
 		}
-		c.Classes[p.ID] = Class{Node: node, By: "human:" + who, Confidence: 1, At: at}
-		res.Status, res.Node, res.Label, res.By, res.Confidence = "classified", node, n.Label, "human:"+who, 1
+		c.Classes[p.ID] = Class{Node: node, By: by, Confidence: 1, At: at}
+		res.Status, res.Node, res.Label, res.By, res.Confidence = "classified", node, n.Label, by, 1
 	}
-	if err := appendEvent(r.Dir, Event{At: at, Type: "classify", Agent: s.Agent, Outcome: "ok", Detail: map[string]any{"plan": p.ID, "node": node, "by": "human:" + who}}); err != nil {
+	if err := appendEvent(r.Dir, Event{At: at, Type: "classify", Agent: s.Agent, By: s.By, Outcome: "ok", Detail: map[string]any{"plan": p.ID, "node": node, "by": by}}); err != nil {
 		return nil, err
 	}
 	return res, s.saveCard(r, c, at)

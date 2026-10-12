@@ -286,7 +286,7 @@ func (s *Store) eraseLocal(it PlanItem) (ErasedItem, PurgedLocation, error) {
 	}
 	at := s.now()
 	c.Version, c.Digest = len(versions), headDigest(newInv)
-	if err := appendEvent(r.Dir, Event{At: at, Type: "erase", Agent: s.Agent, Outcome: "ok", Detail: map[string]any{"versions_erased": len(it.Versions)}}); err != nil {
+	if err := appendEvent(r.Dir, Event{At: at, Type: "erase", Agent: s.Agent, By: s.By, Outcome: "ok", Detail: map[string]any{"versions_erased": len(it.Versions)}}); err != nil {
 		return ErasedItem{}, loc, err
 	}
 	if err := s.saveCard(r, c, at); err != nil {

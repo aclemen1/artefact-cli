@@ -7,7 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.10
 	charm.land/lipgloss/v2 v2.0.6
 	filippo.io/age v1.3.2
-	github.com/aclemen1/tuikit v0.7.0
+	github.com/aclemen1/tuikit v0.8.0
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/coder/acp-go-sdk v0.13.5
 	github.com/go-git/go-billy/v5 v5.9.2

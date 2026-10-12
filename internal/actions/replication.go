@@ -79,7 +79,7 @@ func init() {
 				return nil, spec.UserError("%v", err)
 			}
 			if ctx.Str("verb") == "ls" {
-				s, err := store.Open(cfg, nil, "artefact-cli/"+Version)
+				s, err := openAs(ctx, cfg, nil)
 				if err != nil {
 					return nil, wrap(err)
 				}
@@ -120,7 +120,7 @@ func init() {
 				}
 				// A new client or account sees none of the earlier copies (scope drive.file):
 				// forget them so that the next sync sends everything again.
-				s, err := store.Open(cfg, []string{b.Sphere}, "artefact-cli/"+Version)
+				s, err := openAs(ctx, cfg, []string{b.Sphere})
 				if err != nil {
 					return nil, wrap(err)
 				}

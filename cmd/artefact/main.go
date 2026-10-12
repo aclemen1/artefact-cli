@@ -8,6 +8,7 @@ import (
 	"github.com/aclemen1/artefact-cli/internal/actions"
 	_ "github.com/aclemen1/artefact-cli/internal/server"
 	"github.com/aclemen1/artefact-cli/internal/spec"
+	"golang.org/x/term"
 )
 
 const rootHelp = `artefact — files kept with a stable id, a card, versions and copies.
@@ -71,8 +72,10 @@ func run(argv []string) int {
 	if err != nil {
 		return spec.Emit(act, format, nil, err)
 	}
-	result, err := act.Run(&spec.Context{Args: args, Config: configFlag, Format: format, Stdin: os.Stdin, Stdout: os.Stdout})
-	return spec.Emit(act, format, result, err)
+	ctx := &spec.Context{Args: args, Config: configFlag, Format: format, Stdin: os.Stdin, Stdout: os.Stdout,
+		Argv: rest, Terminal: term.IsTerminal(int(os.Stdin.Fd()))}
+	result, err := actions.Invoke(act, ctx)
+	return spec.Emit(act, format, result, err, ctx.Warnings...)
 }
 
 func printRoot() {

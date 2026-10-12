@@ -20,6 +20,8 @@ type Config struct {
 	Erase Erase             `yaml:"erase,omitempty"`
 	Serve Serve             `yaml:"serve,omitempty"`
 	Views Views             `yaml:"views,omitempty"`
+	// Journal records the writes signed without actor.
+	Journal Journal `yaml:"journal,omitempty"`
 	// Backends are the rclone remotes artefact copies objects to.
 	Backends map[string]Backend `yaml:"backends,omitempty"`
 	// Replication sets, per sphere, how many copies an artefact needs.
@@ -37,6 +39,27 @@ type Config struct {
 		Add []string `yaml:"add,omitempty" json:"add,omitempty"`
 		Ls  []string `yaml:"ls,omitempty" json:"ls,omitempty"`
 	} `yaml:"notes,omitempty"`
+	// History.ls prints the last entries of an artefact's journal (logbook ls
+	// --format json), shown in the detail of the TUI; {id}, {ref}, {sphere}, {limit}.
+	History struct {
+		Ls    []string `yaml:"ls,omitempty" json:"ls,omitempty"`
+		Limit int      `yaml:"limit,omitempty" json:"limit,omitempty"` // default 10
+	} `yaml:"history,omitempty"`
+	// Greffier.text files a line typed in the TUI (i): the text on stdin,
+	// {ref} and {sphere} of the selection.
+	Greffier struct {
+		Text []string `yaml:"text,omitempty" json:"text,omitempty"`
+	} `yaml:"greffier,omitempty"`
+	// Cabinet.open opens or shows the CABINET pane (@); empty: not configured.
+	Cabinet struct {
+		Open []string `yaml:"open,omitempty" json:"open,omitempty"`
+	} `yaml:"cabinet,omitempty"`
+	// Undo.preview (--dry-run) and Undo.last undo the last write on the
+	// selected artefact (u); {ref}, {sphere}.
+	Undo struct {
+		Preview []string `yaml:"preview,omitempty" json:"preview,omitempty"`
+		Last    []string `yaml:"last,omitempty" json:"last,omitempty"`
+	} `yaml:"undo,omitempty"`
 	// Search tunes the search (SPEC §5).
 	Search struct {
 		// Semantic ranks by meaning too: "qmd" (default when the qmd command is found) or "none".
@@ -56,6 +79,16 @@ type Erase struct {
 type Serve struct {
 	Socket string `yaml:"socket,omitempty"` // default ~/.local/state/artefact/sock
 	HTTP   string `yaml:"http,omitempty"`   // loopback address, e.g. 127.0.0.1:7780
+	// By is the actor of the server's own writes (renditions, copies) and of
+	// a request that names none, e.g. routine:artefact-serve.
+	By string `yaml:"by,omitempty"`
+}
+
+// Journal is the command that records an event of artefact, run in the
+// background with the text on stdin; {id}, {type}, {by}, {at} and {sphere}
+// are filled. artefact records only the writes signed without actor (type unsigned).
+type Journal struct {
+	Command []string `yaml:"command,omitempty" json:"command,omitempty"`
 }
 
 // Backend is one storage backend: an rclone remote path, owned by one sphere.

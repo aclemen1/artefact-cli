@@ -7,10 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/aclemen1/artefact-cli/internal/actor"
 	"github.com/aclemen1/artefact-cli/internal/config"
 )
 
@@ -38,10 +41,13 @@ func fill(argv []string, vars map[string]string) []string {
 	return out
 }
 
-func run(argv []string, stdin string) ([]byte, error) {
+func run(argv []string, stdin string, env ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	cmd.Stdin = strings.NewReader(stdin)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -89,10 +95,13 @@ func Of(cfg *config.Config, id, sphere string) ([]Entry, error) {
 }
 
 // Add adds a note to the artefact id, in sphere.
-func Add(cfg *config.Config, id, sphere, body string) error {
+// The actor by fills {by} and goes in the environment of the command:
+// <COMMAND>_BY (from the command's name) and OFFICE_ACTOR.
+func Add(cfg *config.Config, id, sphere, body, by string) error {
 	if len(cfg.Notes.Add) == 0 {
 		return fmt.Errorf("no notes.add command in the configuration")
 	}
-	_, err := run(fill(cfg.Notes.Add, map[string]string{"ref": Ref(id), "sphere": sphere}), body)
+	argv := fill(cfg.Notes.Add, map[string]string{"ref": Ref(id), "sphere": sphere, "by": by})
+	_, err := run(argv, body, actor.Env(filepath.Base(argv[0]), by)...)
 	return err
 }

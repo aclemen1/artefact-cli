@@ -48,6 +48,10 @@ func (m *model) onModal(msg tea.Msg) (tea.Cmd, bool) {
 			return m.deposit(v.String("path"), v.String("sphere"), v.String("title"), date), true
 		case "card":
 			return m.applyCardForm(msg.Values), true
+		case "greffier":
+			return m.sendGreffier(msg.Values.String("greffier")), true
+		case "undo":
+			return m.doUndo(), true
 		case "note":
 			it := m.noteFor
 			m.noteFor = nil
@@ -57,7 +61,7 @@ func (m *model) onModal(msg tea.Msg) (tea.Cmd, bool) {
 				return nil, true
 			}
 			return m.job("note on "+it.Title, func() doneMsg {
-				if err := notes.Add(m.cfg, it.ID, it.Sphere, body); err != nil {
+				if err := notes.Add(m.cfg, it.ID, it.Sphere, body, m.who()); err != nil {
 					return doneMsg{err: err}
 				}
 				return doneMsg{status: "note added", reload: true}
@@ -78,6 +82,10 @@ func (m *model) onModal(msg tea.Msg) (tea.Cmd, bool) {
 		case "erase":
 			m.plan = nil
 			m.setStatus("erasure cancelled; the code is left unused and expires", false)
+			return nil, true
+		case "greffier", "undo":
+			m.greffierFor, m.undoing = [2]string{}, nil
+			m.setStatus("cancelled", false)
 			return nil, true
 		case "deposit", "card", "note":
 			m.editCard, m.noteFor = nil, nil

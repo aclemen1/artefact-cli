@@ -21,6 +21,7 @@ type Client struct {
 	base  string
 	token string
 	agent string
+	by    string
 	http  *http.Client
 }
 
@@ -45,6 +46,11 @@ func WithToken(t string) Option { return func(c *Client) { c.token = t } }
 // WithAgent names the caller in the artefacts' event logs.
 func WithAgent(a string) Option { return func(c *Client) { c.agent = a } }
 
+// WithBy names the actor who signs the writes (human:AC@cli, agent:<id>,
+// routine:<id>), sent as X-Artefact-By. Without it, the client takes
+// $ARTEFACT_BY, then $OFFICE_ACTOR, at construction.
+func WithBy(by string) Option { return func(c *Client) { c.by = by } }
+
 // DefaultSocket is ~/.local/state/artefact/sock.
 func DefaultSocket() string {
 	home, _ := os.UserHomeDir()
@@ -66,7 +72,10 @@ func NewHTTP(base string, opts ...Option) *Client {
 }
 
 func newClient(base string, hc *http.Client, opts []Option) *Client {
-	c := &Client{base: base, http: hc}
+	c := &Client{base: base, http: hc, by: os.Getenv("ARTEFACT_BY")}
+	if c.by == "" {
+		c.by = os.Getenv("OFFICE_ACTOR")
+	}
 	for _, o := range opts {
 		o(c)
 	}
@@ -79,6 +88,9 @@ func (c *Client) do(ctx context.Context, req *http.Request) (*http.Response, err
 	}
 	if c.agent != "" {
 		req.Header.Set("X-Artefact-Agent", c.agent)
+	}
+	if c.by != "" {
+		req.Header.Set("X-Artefact-By", c.by)
 	}
 	return c.http.Do(req.WithContext(ctx))
 }

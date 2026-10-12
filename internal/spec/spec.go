@@ -47,6 +47,8 @@ type Action struct {
 	// Right is what a token needs to call the action over REST or MCP:
 	// read, write or erase. Empty: the action is local to the CLI.
 	Right string `json:"right,omitempty"`
+	// Signed: the action writes and takes the actor parameter by (SPEC §12.1).
+	Signed bool `json:"-"`
 	// Run returns the result payload. A nil result yields {"ok": true}.
 	Run func(ctx *Context) (any, error) `json:"-"`
 	// Text renders the result for --format text. Nil falls back to indented JSON.
@@ -62,14 +64,27 @@ type Context struct {
 	// Access limits a call that comes through the server or MCP. Nil: the
 	// local CLI, with every configured sphere.
 	Access *Access
+	// Argv are the CLI words of the call, for the journal of an unsigned write.
+	Argv []string
+	// Terminal: the CLI runs with stdin on a terminal.
+	Terminal bool
+	// By is the actor resolved for the call (SPEC §12.1).
+	By string
+	// Warnings: what the caller should know although the action succeeded.
+	Warnings []string
 }
+
+func (c *Context) Warn(m string) { c.Warnings = append(c.Warnings, m) }
 
 // Access is the scope of a remote caller.
 type Access struct {
 	Spheres    []string
 	Rights     []string
-	Agent      string
-	LocalPaths bool // the caller shares this machine's files (Unix socket, MCP stdio)
+	Agent      string // the software or channel calling: mnemo, token:<name>, mcp-stdio
+	LocalPaths bool   // the caller shares this machine's files (Unix socket, MCP stdio)
+	// By is the actor the caller names (header X-Artefact-By); Declared the
+	// actor of the server in configuration (serve.by).
+	By, Declared string
 }
 
 func (a *Access) Can(right string) bool {
@@ -148,7 +163,24 @@ func Internal(err error) *Error {
 
 var registry []*Action
 
-func Register(a *Action) { registry = append(registry, a) }
+// ByParam is the actor parameter of the actions that write.
+var ByParam = Param{Name: "by", Kind: String, Help: "Actor who signs the write: human:AC@cli, agent:<id> or routine:<id>. Defaults to $ARTEFACT_BY, then $OFFICE_ACTOR, then human:AC@cli in a terminal."}
+
+// Register adds an action. One that writes (right write or erase) gets the
+// actor parameter by, unless by already names something else (a holder).
+func Register(a *Action) {
+	if a.Right == "write" || a.Right == "erase" {
+		has := false
+		for _, p := range a.Params {
+			has = has || p.Name == "by"
+		}
+		if !has {
+			a.Params = append(a.Params, ByParam)
+			a.Signed = true
+		}
+	}
+	registry = append(registry, a)
+}
 
 func All() []*Action { return registry }
 
@@ -314,11 +346,17 @@ func usage(a *Action) string {
 func Usage(a *Action) string { return usage(a) }
 
 // Emit writes the envelope (or text) and returns the process exit code.
-func Emit(a *Action, format string, result any, err error) int {
+// Warnings go into the envelope, or to stderr in text.
+func Emit(a *Action, format string, result any, err error, warnings ...string) int {
 	if format == "" {
 		format = "json"
 		if a != nil && a.Meta {
 			format = "text"
+		}
+	}
+	if format == "text" {
+		for _, m := range warnings {
+			fmt.Fprintf(os.Stderr, "warning: %s\n", m)
 		}
 	}
 	if err != nil {
@@ -347,12 +385,20 @@ func Emit(a *Action, format string, result any, err error) int {
 		}
 		return code
 	}
-	if result == nil {
-		writeJSON(os.Stdout, map[string]any{"ok": true})
-	} else {
-		writeJSON(os.Stdout, map[string]any{"ok": true, "result": result})
-	}
+	writeJSON(os.Stdout, Envelope(result, warnings))
 	return code
+}
+
+// Envelope is the success envelope: ok, result, warnings.
+func Envelope(result any, warnings []string) map[string]any {
+	env := map[string]any{"ok": true}
+	if result != nil {
+		env["result"] = result
+	}
+	if len(warnings) > 0 {
+		env["warnings"] = warnings
+	}
+	return env
 }
 
 func isString(v any) bool { _, ok := v.(string); return ok }

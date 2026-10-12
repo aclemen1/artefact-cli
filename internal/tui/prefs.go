@@ -86,6 +86,9 @@ func (m *model) savePrefs() {
 
 // Update handles a message, then keeps the preferences a key may have changed.
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if cmd, ok := m.focus.Update(msg); ok {
+		return m, cmd
+	}
 	mm, cmd := m.update(msg)
 	switch msg.(type) {
 	case tea.KeyPressMsg:
@@ -93,6 +96,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rebuildTree() // the filter, the sphere or the sort may have changed
 	case listMsg, searchMsg:
 		m.rebuildTree()
+	}
+	if f := m.syncFocus(); f != nil {
+		cmd = tea.Batch(cmd, f) // the selection changed: the focus follows
 	}
 	return mm, cmd
 }

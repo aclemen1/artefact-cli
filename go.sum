@@ -62,8 +62,8 @@ github.com/abbot/go-http-auth v0.4.0 h1:QjmvZ5gSC7jm3Zg54DqWE/T5m1t2AfDu6QlXJT0E
 github.com/abbot/go-http-auth v0.4.0/go.mod h1:Cz6ARTIzApMJDzh5bRMSUou6UMSp0IEXg9km/ci7TJM=
 github.com/aclemen1/jev v0.1.0 h1:9fjusTiyLpAjdTm3uyiXnup0M6Vi8Vgx+MgKfVjwW3E=
 github.com/aclemen1/jev v0.1.0/go.mod h1:FwnwsJleW9W2WqGTtD5U9AvwX9oQp/0cbFIdTEtaChU=
-github.com/aclemen1/tuikit v0.7.0 h1:3VtKRy7uiPLu3Gzuax5IMI8tkuwbQHRfldfvMLAOiFc=
-github.com/aclemen1/tuikit v0.7.0/go.mod h1:c26EssbW4sXnJHOOYX3QMdMqbvPepFYTrO9L+LcVo0I=
+github.com/aclemen1/tuikit v0.8.0 h1:Tc/aCM2cj+QVaWWIF/GihgZfwOy6TSxMwF1GIhCSZnk=
+github.com/aclemen1/tuikit v0.8.0/go.mod h1:c26EssbW4sXnJHOOYX3QMdMqbvPepFYTrO9L+LcVo0I=
 github.com/adrg/xdg v0.5.3 h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=
 github.com/adrg/xdg v0.5.3/go.mod h1:nlTsY+NNiCBGCK2tpm09vRqfVzrc2fLmXGpBLF0zlTQ=
 github.com/anchore/go-lzo v0.1.1 h1:IwL/fvkdtlIrYIXck6WxZ3nb8WjjHziYYmGxlooyOnM=

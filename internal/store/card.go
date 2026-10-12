@@ -58,7 +58,8 @@ type Class struct {
 type Event struct {
 	At      string         `json:"at"`
 	Type    string         `json:"type"`
-	Agent   string         `json:"agent"`
+	Agent   string         `json:"agent"`        // the software or channel: artefact-cli/<version>, mnemo, token:<name>
+	By      string         `json:"by,omitempty"` // the actor who signs: human:AC@cli, agent:<id>, routine:<id>
 	Outcome string         `json:"outcome"`
 	Version int            `json:"version,omitempty"`
 	Detail  map[string]any `json:"detail,omitempty"`

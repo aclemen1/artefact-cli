@@ -196,7 +196,7 @@ func (s *Store) Seal(ref string) (*SealResult, error) {
 	if err := dropRenditions(r.Dir, c); err != nil {
 		return nil, err
 	}
-	if err := appendEvent(r.Dir, Event{At: at, Type: "seal", Agent: s.Agent, Outcome: "ok", Version: 1, Detail: map[string]any{"versions_erased": n}}); err != nil {
+	if err := appendEvent(r.Dir, Event{At: at, Type: "seal", Agent: s.Agent, By: s.By, Outcome: "ok", Version: 1, Detail: map[string]any{"versions_erased": n}}); err != nil {
 		return nil, err
 	}
 	if err := s.saveCard(r, c, at); err != nil {
@@ -298,7 +298,7 @@ func (s *Store) newVersion(ref, file string, purge bool, kind string) (*RedactRe
 			c.Embedded = &e
 		}
 	}
-	if err := appendEvent(r.Dir, Event{At: at, Type: kind, Agent: s.Agent, Outcome: "ok", Version: c.Version, Detail: map[string]any{"versions_erased": erased}}); err != nil {
+	if err := appendEvent(r.Dir, Event{At: at, Type: kind, Agent: s.Agent, By: s.By, Outcome: "ok", Version: c.Version, Detail: map[string]any{"versions_erased": erased}}); err != nil {
 		return nil, err
 	}
 	if err := s.saveCard(r, c, at); err != nil {

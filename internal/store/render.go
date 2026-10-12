@@ -209,7 +209,7 @@ func (s *Store) Render(ref string, force bool) (*RenderResult, error) {
 		}
 	}
 	c.Rendition = rend
-	if err := appendEvent(r.Dir, Event{At: rend.At, Type: "render", Agent: s.Agent, Outcome: map[bool]string{true: "ok", false: "failed"}[rend.Error == ""], Version: c.Version}); err != nil {
+	if err := appendEvent(r.Dir, Event{At: rend.At, Type: "render", Agent: s.Agent, By: s.By, Outcome: map[bool]string{true: "ok", false: "failed"}[rend.Error == ""], Version: c.Version}); err != nil {
 		return nil, err
 	}
 	if err := s.saveCard(r, c, rend.At); err != nil {

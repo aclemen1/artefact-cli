@@ -17,6 +17,7 @@ import (
 
 	"github.com/aclemen1/artefact-cli/internal/access"
 	"github.com/aclemen1/artefact-cli/internal/actions"
+	"github.com/aclemen1/artefact-cli/internal/actor"
 	"github.com/aclemen1/artefact-cli/internal/config"
 	"github.com/aclemen1/artefact-cli/internal/mcpserver"
 	"github.com/aclemen1/artefact-cli/internal/spec"
@@ -86,7 +87,18 @@ func init() {
 				fmt.Fprintf(os.Stderr, " and http://%s", addr)
 			}
 			fmt.Fprintln(os.Stderr)
-			return nil, New(path, cfg, actions.Version).Serve(c, sock, addr)
+			srv := New(path, cfg, actions.Version)
+			// The server's own writes: serve.by, else the environment; a
+			// request names its actor in X-Artefact-By.
+			if got, err := actor.Resolve(actor.Request{Declared: cfg.Serve.By, Var: actions.ByVar}); err != nil {
+				fmt.Fprintf(os.Stderr, "artefact serve: renditions and copies signed %s: %v; declare serve.by, e.g. routine:artefact-serve\n", actor.Unknown, err)
+			} else if got.Unsigned {
+				fmt.Fprintf(os.Stderr, "artefact serve: warning: %s\n", actor.Warning(actions.ByVar))
+				actions.Unsigned(ctx, spec.Find("ops", "serve"))
+			} else {
+				srv.By = got.By
+			}
+			return nil, srv.Serve(c, sock, addr)
 		},
 	})
 	spec.Register(&spec.Action{
@@ -292,7 +304,7 @@ func init() {
 	spec.Register(&spec.Action{
 		Category: "ops", Name: "tui",
 		Summary:    "Browse the artefacts in the terminal: list and plans, card, versions, holders, notes, events; open, edit, classify, archive, seal, erase.",
-		Discussion: "? in the TUI lists every key. --select opens the TUI on one artefact, selected and visible (the view widens to show it); an unknown id opens the TUI as usual, with a message.",
+		Discussion: "? in the TUI lists every key. --select opens the TUI on one artefact, selected and visible (the view widens to show it); an unknown id opens the TUI as usual, with a message. The selection is written to the shared focus file ($OFFICE_FOCUS, else ~/.local/state/office/focus.json) as artefact:<id>. i sends a line to the greffier (greffier.text), @ opens the CABINET pane (cabinet.open), u undoes the last write on the artefact (undo.preview, undo.last); the detail shows its journal (history.ls).",
 		Params: []spec.Param{
 			{Name: "spheres", Kind: spec.String, Help: "Comma-separated spheres to show. Defaults to every configured sphere."},
 			{Name: "select", Kind: spec.String, Help: "Artefact to open the TUI on, selected: a ULID or artefact://<sphere>/<id>."},
@@ -313,6 +325,11 @@ func init() {
 			if err != nil {
 				return nil, err
 			}
+			got, err := actor.Resolve(actions.Request(ctx, true))
+			if err != nil {
+				return nil, spec.UserError("%s", err.Error())
+			}
+			st.By = got.By
 			defer st.Close()
 			return spec.Streamed{}, tui.Run(cfg, st, Locate, actions.Version, ctx.Str("select"))
 		},

@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/aclemen1/artefact-cli/internal/actor"
 	"github.com/aclemen1/artefact-cli/internal/config"
 	"github.com/aclemen1/artefact-cli/internal/index"
 	"github.com/aclemen1/artefact-cli/internal/keys"
@@ -872,5 +873,16 @@ func TestBusyJobs(t *testing.T) {
 	press(t, m, "!")
 	if v := ansi.Strip(m.View().Content); !strings.Contains(v, "Deposit a file") || strings.Contains(v, "sync perso") {
 		t.Fatalf("! during an input must not open the jobs:\n%s", v)
+	}
+}
+
+func TestWhoIsTheTUIActor(t *testing.T) {
+	m := &model{st: &store.Store{}}
+	if m.who() != actor.TUI {
+		t.Errorf("who %q", m.who())
+	}
+	m.st.By = "agent:office-P-0019"
+	if m.who() != "agent:office-P-0019" {
+		t.Errorf("who %q", m.who())
 	}
 }

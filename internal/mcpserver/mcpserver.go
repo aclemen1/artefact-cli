@@ -22,16 +22,16 @@ import (
 // MaxInline is the largest payload get returns inside a tool result.
 const MaxInline = 25 << 20
 
-func envelope(v any, err error) *mcp.CallToolResult {
+func envelope(v any, err error, warnings ...string) *mcp.CallToolResult {
 	var b []byte
 	if err != nil {
 		b, _ = json.MarshalIndent(map[string]any{"ok": false, "error": spec.Internal(err)}, "", "  ")
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(b)}}, IsError: true}
 	}
-	if v == nil {
+	if v == nil && len(warnings) == 0 {
 		b, _ = json.Marshal(map[string]any{"ok": true})
 	} else {
-		b, _ = json.MarshalIndent(map[string]any{"ok": true, "result": v}, "", "  ")
+		b, _ = json.MarshalIndent(spec.Envelope(v, warnings), "", "  ")
 	}
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(b)}}}
 }
@@ -181,7 +181,7 @@ func call(cfgPath string, a *spec.Action, access *spec.Access, in map[string]any
 		if out.Len() > MaxInline {
 			return envelope(nil, spec.UserError("payload of %d bytes is too large to return inline; read the resource %s instead", out.Len(), args["id"]))
 		}
-		return envelope(map[string]any{"size": out.Len(), "content_base64": base64.StdEncoding.EncodeToString(out.Bytes())}, nil)
+		return envelope(map[string]any{"size": out.Len(), "content_base64": base64.StdEncoding.EncodeToString(out.Bytes())}, nil, ctx.Warnings...)
 	}
-	return envelope(res, err)
+	return envelope(res, err, ctx.Warnings...)
 }

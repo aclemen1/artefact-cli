@@ -21,6 +21,7 @@ import (
 
 	"github.com/aclemen1/artefact-cli/internal/access"
 	"github.com/aclemen1/artefact-cli/internal/actions"
+	"github.com/aclemen1/artefact-cli/internal/actor"
 	"github.com/aclemen1/artefact-cli/internal/config"
 	"github.com/aclemen1/artefact-cli/internal/mcpserver"
 	"github.com/aclemen1/artefact-cli/internal/spec"
@@ -32,6 +33,10 @@ type Server struct {
 	Cfg     *config.Config
 	Tokens  *access.Store
 	Version string
+
+	// By signs the server's own writes (renditions, copies): serve.by, else
+	// $ARTEFACT_BY or $OFFICE_ACTOR, else actor.Unknown.
+	By string
 
 	mu    sync.Mutex
 	mcps  map[string]*mcp.Server
@@ -91,6 +96,7 @@ func (h *Server) authenticate(local bool, next http.Handler) http.Handler {
 		if agent := r.Header.Get("X-Artefact-Agent"); agent != "" && hasToken {
 			a.Agent = "token:" + strings.TrimPrefix(a.Agent, "token:") + "/" + agent
 		}
+		a.By, a.Declared = strings.TrimSpace(r.Header.Get("X-Artefact-By")), h.Cfg.Serve.By
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, a)))
 	})
 }
@@ -125,7 +131,7 @@ func (h *Server) Handler(local bool) http.Handler {
 }
 
 func (h *Server) mcpFor(a *spec.Access) *mcp.Server {
-	key := fmt.Sprint(a.Spheres, a.Rights, a.Agent, a.LocalPaths)
+	key := fmt.Sprint(a.Spheres, a.Rights, a.Agent, a.LocalPaths, a.By, a.Declared)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if s, ok := h.mcps[key]; ok {
@@ -165,7 +171,8 @@ func (h *Server) run(w http.ResponseWriter, r *http.Request, a *spec.Action, in 
 		body = strings.NewReader("")
 	}
 	lw := &lazyWriter{w: w, mime: mime}
-	res, err := actions.Invoke(a, &spec.Context{Args: args, Config: h.CfgPath, Access: accessOf(r), Stdin: body, Stdout: lw})
+	ctx := &spec.Context{Args: args, Config: h.CfgPath, Access: accessOf(r), Stdin: body, Stdout: lw}
+	res, err := actions.Invoke(a, ctx)
 	if err != nil {
 		if lw.written {
 			return // the payload was partly sent; the connection carries the failure
@@ -176,7 +183,7 @@ func (h *Server) run(w http.ResponseWriter, r *http.Request, a *spec.Action, in 
 	if _, ok := res.(spec.Streamed); ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, envelope(res))
+	writeJSON(w, http.StatusOK, spec.Envelope(res, ctx.Warnings))
 }
 
 // action serves POST /v1/<action>. A JSON body carries the parameters; for
@@ -271,13 +278,6 @@ func (h *Server) mimeOf(r *http.Request, uri string) string {
 		return ref.Row.Mime
 	}
 	return ""
-}
-
-func envelope(res any) map[string]any {
-	if res == nil {
-		return map[string]any{"ok": true}
-	}
-	return map[string]any{"ok": true, "result": res}
 }
 
 func writeError(w http.ResponseWriter, err error) {
@@ -413,6 +413,14 @@ func (h *Server) Serve(ctx context.Context, socketPath, httpAddr string) error {
 	return nil
 }
 
+// own is the actor of the server's own writes.
+func (h *Server) own() string {
+	if h.By != "" {
+		return h.By
+	}
+	return actor.Unknown
+}
+
 // syncLoop keeps every sphere's backends up to date, at start and then every
 // replication.<sphere>.every.
 // renderLoop makes the missing text renditions every few minutes, a batch
@@ -426,6 +434,7 @@ func (h *Server) renderLoop(ctx context.Context) {
 		fmt.Fprintf(os.Stderr, "artefact serve: render: %v\n", err)
 		return
 	}
+	st.By = h.own()
 	defer st.Close()
 	t := time.NewTicker(5 * time.Minute)
 	defer t.Stop()
@@ -465,6 +474,7 @@ func (h *Server) syncLoop(ctx context.Context) {
 				fmt.Fprintf(os.Stderr, "artefact serve: sync %s: %v\n", sp, err)
 				return
 			}
+			st.By = h.own()
 			defer st.Close()
 			t := time.NewTicker(every)
 			defer t.Stop()

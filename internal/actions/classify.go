@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/user"
 	"strings"
 	"time"
 
+	"github.com/aclemen1/artefact-cli/internal/actor"
 	"github.com/aclemen1/artefact-cli/internal/classify"
 	"github.com/aclemen1/artefact-cli/internal/config"
 	"github.com/aclemen1/artefact-cli/internal/spec"
@@ -176,15 +176,12 @@ func contains(l []string, s string) bool {
 	return false
 }
 
-// who names the human behind a CLI decision.
+// who is the actor behind a decision by hand.
 func who(ctx *spec.Context) string {
-	if ctx.Access != nil {
-		return ctx.Access.Agent
+	if ctx.By != "" {
+		return ctx.By
 	}
-	if u, err := user.Current(); err == nil {
-		return u.Username
-	}
-	return "unknown"
+	return actor.Unknown
 }
 
 func init() {

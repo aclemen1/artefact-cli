@@ -43,7 +43,8 @@ func (e *NotFound) Error() string { return e.Msg }
 type Store struct {
 	Cfg     *config.Config
 	Spheres []string // spheres granted to the caller
-	Agent   string   // who acts, written in events
+	Agent   string   // the software or channel that acts, written in events
+	By      string   // the actor who signs the writes (SPEC §12.1), written in events and versions
 	Now     func() time.Time
 	Keys    keys.Source
 	Jev     *jev.Client // opened on the first jev or openjev decision; released by Close
@@ -417,12 +418,12 @@ func (s *Store) Put(r io.Reader, o PutOptions) (*PutResult, error) {
 		staged.Abort()
 		return nil, err
 	}
-	if err := appendEvent(staged.Dir, Event{At: at, Type: "deposit", Agent: s.Agent, Outcome: "ok", Version: 1, Detail: detail}); err != nil {
+	if err := appendEvent(staged.Dir, Event{At: at, Type: "deposit", Agent: s.Agent, By: s.By, Outcome: "ok", Version: 1, Detail: detail}); err != nil {
 		staged.Abort()
 		return nil, err
 	}
 	for _, h := range c.Holders {
-		if err := appendEvent(staged.Dir, Event{At: at, Type: "hold", Agent: s.Agent, Outcome: "ok", Detail: map[string]any{"by": h.By, "ref": h.Ref}}); err != nil {
+		if err := appendEvent(staged.Dir, Event{At: at, Type: "hold", Agent: s.Agent, By: s.By, Outcome: "ok", Detail: map[string]any{"by": h.By, "ref": h.Ref}}); err != nil {
 			staged.Abort()
 			return nil, err
 		}
@@ -448,6 +449,9 @@ func (s *Store) Put(r io.Reader, o PutOptions) (*PutResult, error) {
 }
 
 func (s *Store) user() *ocfl.User {
+	if s.By != "" {
+		return &ocfl.User{Name: s.By, Address: "urn:x-artefact-actor:" + url.PathEscape(s.By)}
+	}
 	return &ocfl.User{Name: s.Agent, Address: "urn:x-artefact-agent:" + url.PathEscape(s.Agent)}
 }
 
@@ -486,7 +490,7 @@ func (s *Store) addHolders(ref *Ref, c *Card, holds []index.Holder) error {
 		h.At = at
 		if c.addHolder(h) {
 			changed = true
-			if err := appendEvent(ref.Dir, Event{At: at, Type: "hold", Agent: s.Agent, Outcome: "ok", Detail: map[string]any{"by": h.By, "ref": h.Ref}}); err != nil {
+			if err := appendEvent(ref.Dir, Event{At: at, Type: "hold", Agent: s.Agent, By: s.By, Outcome: "ok", Detail: map[string]any{"by": h.By, "ref": h.Ref}}); err != nil {
 				return err
 			}
 		}
@@ -594,7 +598,7 @@ func (s *Store) Release(ref string, by, holdRef string) (*Card, int, error) {
 		return c, 0, nil
 	}
 	at := s.now()
-	if err := appendEvent(r.Dir, Event{At: at, Type: "release", Agent: s.Agent, Outcome: "ok", Detail: map[string]any{"by": by, "ref": holdRef, "count": n}}); err != nil {
+	if err := appendEvent(r.Dir, Event{At: at, Type: "release", Agent: s.Agent, By: s.By, Outcome: "ok", Detail: map[string]any{"by": by, "ref": holdRef, "count": n}}); err != nil {
 		return nil, 0, err
 	}
 	return c, n, s.saveCard(r, c, at)
@@ -636,7 +640,7 @@ func (s *Store) EditCard(ref string, sets []string, mergeDoc string) (*Card, err
 		fields = append(fields, "merge")
 	}
 	at := s.now()
-	if err := appendEvent(r.Dir, Event{At: at, Type: "card", Agent: s.Agent, Outcome: "ok", Detail: map[string]any{"fields": fields}}); err != nil {
+	if err := appendEvent(r.Dir, Event{At: at, Type: "card", Agent: s.Agent, By: s.By, Outcome: "ok", Detail: map[string]any{"fields": fields}}); err != nil {
 		return nil, err
 	}
 	return c, s.saveCard(r, c, at)
@@ -1042,7 +1046,7 @@ func (s *Store) Archive(ref string, archived bool, reason string) (*Card, error)
 	if reason != "" {
 		detail = map[string]any{"reason": reason}
 	}
-	if err := appendEvent(r.Dir, Event{At: at, Type: typ, Agent: s.Agent, Outcome: "ok", Detail: detail}); err != nil {
+	if err := appendEvent(r.Dir, Event{At: at, Type: typ, Agent: s.Agent, By: s.By, Outcome: "ok", Detail: detail}); err != nil {
 		return nil, err
 	}
 	return c, s.saveCard(r, c, at)

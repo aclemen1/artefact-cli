@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/aclemen1/artefact-cli/internal/actor"
 	"github.com/aclemen1/artefact-cli/internal/notes"
 	"github.com/aclemen1/tuikit"
 	"io"
@@ -137,6 +138,11 @@ type model struct {
 	revealed     []string          // decrypted temporary files, deleted on quit
 	busy         *tuikit.Busy      // the background jobs, shown in the header; ! lists them
 	ended        *ended            // jobs ended, whose reload or back is still to apply
+	focus        *tuikit.Focus     // the selection, written to the shared focus file
+	focusRef     string            // the ref last handed to focus
+	greffierFor  [2]string         // ref and sphere the open greffier line is typed on
+	undoing      *undoPreviewMsg   // the undo waiting for its confirmation
+	journal      []historyEntry    // the journal of the artefact in detail
 
 	w, h      int
 	status    string
@@ -149,7 +155,7 @@ func newModel(cfg *config.Config, st *store.Store, locate Locator) *model {
 	styles := in.Styles()
 	styles.Cursor.Blink = false
 	in.SetStyles(styles)
-	return &model{cfg: cfg, st: st, locate: locate, spheres: st.Spheres, input: in, w: 100, h: 30, copies: map[string]store.CopyState{}, edits: map[string]*edit{}, treeOpen: map[string]bool{}, busy: tuikit.NewBusy(), ended: &ended{}}
+	return &model{cfg: cfg, st: st, locate: locate, spheres: st.Spheres, input: in, w: 100, h: 30, copies: map[string]store.CopyState{}, edits: map[string]*edit{}, treeOpen: map[string]bool{}, busy: tuikit.NewBusy(), ended: &ended{}, focus: tuikit.NewFocus("artefact")}
 }
 
 // ------------------------------------------------------------------ data
@@ -160,14 +166,17 @@ type (
 		err   error
 	}
 	detailMsg struct {
-		st  *store.Stat
-		err error
+		st      *store.Stat
+		journal []historyEntry
+		err     error
 	}
 	doneMsg struct {
 		status string
 		err    error
 		reload bool
 		back   bool
+		say    bool // the status stays in the status line once the job ended (greffier, undo)
+		warn   bool // the status says something to look at
 	}
 	planMsg struct {
 		plan *store.Plan
@@ -226,10 +235,12 @@ func (m *model) loadDetail(id string) tea.Cmd {
 			// A note tool that fails leaves the detail shown without notes.
 			st[0].Notes, _ = notes.Of(m.cfg, st[0].Card.ID, st[0].Card.Sphere)
 		}
-		return detailMsg{st: &st[0]}
+		// A journal that fails stays discreet: the section is hidden.
+		journal, _ := historyOf(m.cfg, st[0].Card.ID, st[0].Card.Sphere)
+		return detailMsg{st: &st[0], journal: journal}
 	}
-	if notes.Configured(m.cfg) {
-		return m.wrap("read the notes of "+shortID(id), cmd) // an outside tool
+	if notes.Configured(m.cfg) || len(m.cfg.History.Ls) > 0 {
+		return m.wrap("read the notes and journal of "+shortID(id), cmd) // outside tools
 	}
 	return cmd
 }
@@ -455,10 +466,12 @@ func (m *model) updateBase(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.mode, m.detail = modeList, nil
 			return m, m.load()
 		}
-		m.detail = msg.st
+		m.detail, m.journal = msg.st, msg.journal
 		return m, nil
 	case doneMsg:
 		return m, m.onDone(msg, true)
+	case undoPreviewMsg:
+		return m, m.confirmUndo(msg)
 	case planMsg:
 		if msg.err != nil {
 			m.setStatus(msg.err.Error(), true)
@@ -494,6 +507,10 @@ func (m *model) updateBase(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.String() == tuikit.BusyKey {
 			return m, m.openJobs()
+		}
+		if cmd, ok := m.sharedKey(msg.String()); ok {
+			m.pendingG = false
+			return m, cmd
 		}
 		if m.mode == modeDetail {
 			return m, m.keyDetail(msg)
@@ -1036,6 +1053,7 @@ func (m *model) renderDetail() string {
 			}
 		}
 	}
+	lines = append(lines, m.journalLines()...)
 	lines = append(lines, "", sBold.Render(fmt.Sprintf("Events (%d)", len(d.Events))))
 	for i := len(d.Events) - 1; i >= 0; i-- {
 		e := d.Events[i]
@@ -1043,7 +1061,11 @@ func (m *model) renderDetail() string {
 		if e.Version > 0 {
 			v = fmt.Sprintf(" v%d", e.Version)
 		}
-		lines = append(lines, sMuted.Render(fmt.Sprintf("  %s  %-9s%s  %s  %s", e.At, e.Type, v, e.Agent, e.Outcome)))
+		who := e.By
+		if who == "" {
+			who = e.Agent
+		}
+		lines = append(lines, sMuted.Render(fmt.Sprintf("  %s  %-9s%s  %s  %s", e.At, e.Type, v, who, e.Outcome)))
 	}
 	if m.plan != nil {
 		lines = append(lines, "", sErr.Render("Erasure plan"))
@@ -1111,11 +1133,11 @@ func (m *model) footer() string {
 	case m.prompt != promptNone:
 		help = m.input.View()
 	case m.planView != nil && m.mode != modeDetail && m.planView.assign == nil:
-		help = helpLine("l/h", "open/close", "enter", "list class/detail", "o", "open", "f", "finder", "E/M", "card/content", "m", "classify", "x", "archive", "/", "search", "t/T", "sort", "esc", "back", "?", "keys", "q", "quit")
+		help = helpLine("l/h", "open/close", "enter", "list class/detail", "o", "open", "f", "finder", "E/M", "card/content", "m", "classify", "x", "archive", "/", "search", "t/T", "sort", "i", "greffier", "u", "undo", "esc", "back", "?", "keys", "q", "quit")
 	case m.mode == modeDetail:
-		help = helpLine("o", "open", "f", "finder", "E", "edit card", "M", "edit content", "m", "classify", "x", "archive", "S", "seal", "#", "erase", "esc", "back", "?", "keys", "q", "quit")
+		help = helpLine("o", "open", "f", "finder", "E", "edit card", "M", "edit content", "m", "classify", "x", "archive", "S", "seal", "#", "erase", "i", "greffier", "u", "undo", "@", "cabinet", "esc", "back", "?", "keys", "q", "quit")
 	default:
-		help = helpLine("enter", "detail", "o", "open", "f", "finder", "E/M", "card/content", "m", "classify", "x", "archive", "c", "new", "2", "plans", "/", "search", "t/T", "sort", "esc", "back", "?", "keys", "q", "quit")
+		help = helpLine("enter", "detail", "o", "open", "f", "finder", "E/M", "card/content", "m", "classify", "x", "archive", "c", "new", "2", "plans", "/", "search", "t/T", "sort", "i", "greffier", "u", "undo", "esc", "back", "?", "keys", "q", "quit")
 	}
 	if m.prompt == promptNone && m.busy.Unread() > 0 {
 		help = helpLine(tuikit.BusyKey, "jobs") + sMuted.Render(" · ") + help
@@ -1177,6 +1199,7 @@ func (m *model) legendLines() []string {
 			{"X", "erase an artefact a tool still holds (your override)"},
 			{"c", "deposit a file (new artefact): its path, then its sphere when none is in view"},
 			{"N", "add a note to the artefact (shown in its detail)"},
+			{"u", "undo the last write on the artefact (undo.preview, then a confirmation, then undo.last); a reverse that cannot be undone in turn is never run here: undo tui --select <id>"},
 		}},
 		{"Plans (2, C)", [][2]string{
 			{"l  →", "open a class: its sub-classes, then its artefacts"},
@@ -1185,7 +1208,7 @@ func (m *model) legendLines() []string {
 			{"t  T", "sort the artefacts of each class; classes keep the order of their notation"},
 		}},
 		{"Detail", [][2]string{{"j k  J K", "scroll"}}},
-		{"Everywhere", [][2]string{{"?", "these keys"}, {tuikit.BusyKey, "background jobs: sync, deposits, searches, classes, opening…; a failure stays red in the status line until this list is opened"}, {"esc", "back to the previous view; never quits"}, {"q  ctrl+c", "quit, from any view (in a field, q is typed)"}}},
+		{"Everywhere", [][2]string{{"?", "these keys"}, {"i", "a free line for the greffier (greffier.text), on the selected artefact; its proposal and doubts come back in the status line"}, {"@", "open or show the CABINET pane (cabinet.open)"}, {tuikit.BusyKey, "background jobs: sync, deposits, searches, classes, opening…; a failure stays red in the status line until this list is opened"}, {"esc", "back to the previous view; never quits"}, {"q  ctrl+c", "quit, from any view (in a field, q is typed)"}}},
 	} {
 		section(theme.title)
 		for _, kv := range theme.keys {
@@ -1202,6 +1225,8 @@ func (m *model) legendLines() []string {
 	} {
 		out = append(out, "  "+mk[0]+"  "+sMuted.Render(mk[1]))
 	}
+	section("Journal of the detail")
+	out = append(out, "  "+sWarn.Render("↶ undoable")+"  "+sMuted.Render("the entry carries its reverse: u undoes the last one (shown when undo.last is configured)"))
 	section("Sync line")
 	out = append(out, "  "+sWarn.Render("⟳")+"  "+sMuted.Render("a sync is running: files sent out of files to send"),
 		"  "+sOK.Render("✓")+"  "+sMuted.Render("the last sync finished at the time shown"))
@@ -1359,12 +1384,12 @@ func (m *model) checkEdits() tea.Cmd {
 
 func indexFilterAll() index.Filter { return index.Filter{} }
 
-// who names the human behind a TUI decision.
-func who() string {
-	if u := os.Getenv("USER"); u != "" {
-		return u
+// who is the actor of a TUI decision: always human:AC@tui.
+func (m *model) who() string {
+	if m.st.By != "" {
+		return m.st.By
 	}
-	return "tui"
+	return actor.TUI
 }
 
 // effectiveOrder is the order in force, defaults resolved.

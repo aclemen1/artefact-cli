@@ -93,7 +93,7 @@ dc:                           # optional Dublin Core terms
 classes:                      # one entry per plan (§9)
   household:
     node: "3.2.1"
-    by: decider:openjev       # decider:<name> | human:<id> | rule:<id>
+    by: decider:openjev       # decider:<name> | rule:<id> | the actor of a decision by hand
     confidence: 0.93
     at: 2026-10-05T14:02:11+02:00
 holders:                      # §3.4
@@ -115,10 +115,14 @@ Every action that changes an artefact appends one event, in the PREMIS
 manner: what happened, when, by whom, with what outcome.
 
 ```json
-{"at":"2026-10-05T14:01:40+02:00","type":"deposit","agent":"mnemo/0.4.0","outcome":"ok","version":1}
-{"at":"2026-10-05T14:03:02+02:00","type":"replicate","agent":"artefact","outcome":"ok","location":"gdrive-perso"}
-{"at":"2026-10-06T03:00:12+02:00","type":"fixity","agent":"artefact","outcome":"ok"}
+{"at":"2026-10-05T14:01:40+02:00","type":"deposit","agent":"mnemo","by":"agent:office-P-0024","outcome":"ok","version":1}
+{"at":"2026-10-05T14:03:02+02:00","type":"replicate","agent":"artefact-sync","by":"routine:artefact-serve","outcome":"ok","location":"gdrive-perso"}
+{"at":"2026-10-06T03:00:12+02:00","type":"fixity","agent":"artefact-cli/0.1.0","by":"human:AC@cli","outcome":"ok"}
 ```
+
+`agent` is the software or channel (`artefact-cli/<version>`, `mnemo`,
+`token:<name>`, `mcp-stdio`); `by` is the actor who signs (§12.1). The OCFL
+version's user is the actor too.
 
 Event types: `deposit`, `version`, `seal`, `redact`, `card`, `classify`,
 `hold`, `release`, `replicate`, `drop`, `fixity`, `erase`. An event never
@@ -537,8 +541,9 @@ A decider answers: which child of this node does the artefact belong to?
     node was chosen yet);
   - below `classify.threshold` (0.8): the class stays at the current node,
     marked `pending`, for a human (`artefact ls --pending`).
-- `classify <id> --plan <p> --node <notation>` records a human decision
-  (`by: human:<user>`). A decider never overwrites it.
+- `classify <id> --plan <p> --node <notation>` records a decision by hand,
+  signed by its actor (`by: human:AC@cli`, `agent:<id>`…, §12.1). A decider
+  never overwrites a class whose `by` is not `decider:` or `rule:`.
 - Every decision appends a `classify` event with the steps: level, choice,
   confidence, and the five best probabilities.
 - `artefact ls --class <plan>[:<notation>]` lists a class and its
@@ -691,7 +696,8 @@ Reads run over every granted sphere unless one is named.
 - On the Unix socket (mode 0600, so only the user's processes reach it), a
   request without a token has every sphere and right, like the local CLI; a
   request with a token is limited to the token. Over TCP, a token is
-  required. `X-Artefact-Agent` names the caller in the event logs.
+  required. `X-Artefact-Agent` names the calling software in the event logs
+  (`agent`); `X-Artefact-By` names the actor (§12.1).
 - `artefact mcp` grants `--rights read,write` by default; `reveal` and
   `erase` are given only when named.
 - Each action declares the right it needs (`schema` shows it as `right`).
@@ -702,6 +708,33 @@ Reads run over every granted sphere unless one is named.
   request or the response.
 - An id of an ungranted sphere is reported as missing; a URI of an
   ungranted sphere is refused explicitly.
+
+### 12.1 Actor
+
+Every write is signed by an actor: `human:AC@tui`, `human:AC@cli`,
+`agent:<id>` (e.g. `agent:office-P-0019`), `routine:<id>`. It goes in the
+`by` of events, of a class set by hand, of the OCFL version, and into the
+`notes.add` command (`{by}`, and `<COMMAND>_BY` and `OFFICE_ACTOR` in its
+environment).
+
+A gesture in the TUI is always signed `human:AC@tui`: an inherited
+`$ARTEFACT_BY` or `$OFFICE_ACTOR` is ignored there. Elsewhere, first found:
+
+1. `--by` on a write action (`hold` and `release` keep `--by` for the
+   holder); over the server, the request's `X-Artefact-By` header (the client
+   sends `$ARTEFACT_BY`, else `$OFFICE_ACTOR`, or `client.WithBy`);
+2. `serve.by`, the actor of `artefact serve` (its requests and its own
+   renditions and copies);
+3. `$ARTEFACT_BY`;
+4. `$OFFICE_ACTOR`;
+5. at the CLI with stdin on a terminal, `human:AC@cli`.
+
+`artefact mcp` (stdio) and `artefact serve` are never a terminal. Without an
+actor, a write is signed `unknown:cli` through 2026-10-19 (Europe/Zurich):
+a warning goes in the envelope's `warnings` (stderr in text) and an entry
+`type: unsigned` (text: the tool and its command) goes through
+`journal.command`, if configured. From 2026-10-20 such a write is refused:
+code 2, `user_error`, with how to pose the actor. Reads need no actor.
 
 ## 13. TUI
 
@@ -714,7 +747,8 @@ Keys follow the common convention of the ecosystem's TUIs.
 | Scope | Keys |
 |---|---|
 | move, views | `j`/`k`, `gg`/`G`, `ctrl+d`/`ctrl+u`; `enter`/`l`/`tab` detail; `esc`/`h` back (never quits); `1` list, `2` plans (`C`), `3` pending (`P`), `4` archives (`A`), `5` orphaned (`O`); `s` sphere; `t`/`T` sort; `/` search; `r` refresh; `R` sync now; `!` background jobs (tuikit Busy, in the status line; a failure stays red until the list is opened); `?` help; `q` quit |
-| the selected artefact | `o` open read-only, `f` show in the Finder, `E` edit the card, `M` edit the content (next version), `m` place in a class, `e`/`x` archive or make active (reversible), `S` seal, `#` erase (plan and code), `X` erase a held artefact |
+| the selected artefact | `o` open read-only, `f` show in the Finder, `E` edit the card, `M` edit the content (next version), `m` place in a class, `e`/`x` archive or make active (reversible), `S` seal, `#` erase (plan and code), `X` erase a held artefact, `N` add a note, `u` undo the last write on it |
+| shared | `i` a free line for the greffier, `@` the CABINET pane |
 | new | `c` deposit a file: its path, then its sphere when none is in view |
 | plans | `l` open a class, `h` close it or go up, `enter` list a class or show an artefact |
 | detail | `j`/`k`, `J`/`K` scroll |
@@ -728,6 +762,25 @@ Keys follow the common convention of the ecosystem's TUIs.
   `{sphere}`); the detail shows the notes read by `notes.ls`, as does
   `stat --with-notes`. artefact names no note tool: the commands are
   configuration.
+- Focus: at each change of selection (list, plans, detail), after 300 ms
+  without another, the TUI writes `~/.local/state/office/focus.json`
+  (`$OFFICE_FOCUS` replaces it): `{ref: artefact:<id>, title, tool: artefact,
+  sphere, at}`, through tuikit's `Focus`.
+- Shared keys, each a command of the configuration (a missing one says so in
+  the status line), run as background jobs, with the `<TOOL>_BY` of the command
+  (`GREFFIER_BY`, `UNDO_BY`) and `OFFICE_ACTOR` set to `human:AC@tui`:
+  - `i`: a TextArea, then `greffier.text` with the text on stdin and `{ref}`,
+    `{sphere}` of the selection; the answer `{handled, doubts, proposal}`
+    shows in the status line: the proposal in one line, then the doubts.
+  - `@`: `cabinet.open`; empty, a message.
+  - `u`: `undo.preview` (`--dry-run`) gives the entry and its reverse, shown
+    in a yes/no confirmation; yes runs `undo.last`. An entry marked
+    `irreversible`, or an answer `needs_validation`, is never run from the TUI:
+    the message points to `undo tui --select <id>`.
+- Journal: the detail shows the last entries of the artefact's journal, read
+  by `history.ls` (`logbook ls --format json`, `{ref}`, `{id}`, `{sphere}`,
+  `{limit}`, default limit 10); hidden when empty or failing. An entry that
+  carries `undo` is marked « ↶ undoable » when `undo.last` is configured.
 - Every input but the filter (`/`) opens in a centred modal (the shared
   `github.com/aclemen1/tuikit`), which takes every key: `c` a form (file,
   sphere without preselection, title, date), `E` the card as a form (title,
@@ -861,7 +914,20 @@ classify:
   deciders:
     acp:     { command: [herdr-acp, --agent, claude] }
 lector: { command: [lector] }
-serve: { http: 127.0.0.1:7780, socket: ~/.local/state/artefact/sock }
+serve: { http: 127.0.0.1:7780, socket: ~/.local/state/artefact/sock, by: routine:artefact-serve }
+notes:
+  add: [note, add, -, --ref, "{ref}", --sphere, "{sphere}", --by, "{by}", --format, json]
+  ls:  [note, ls, --ref, "{ref}", --format, json]
+journal:                  # writes signed without actor (§12.1)
+  command: [logbook, add, -, --source, "artefact:{id}", --type, "{type}", --sphere, "{sphere}", --by, "{by}", --at, "{at}"]
+history:                  # journal in the detail of the TUI (§13)
+  ls: [logbook, ls, --ref, "{ref}", --limit, "{limit}", --format, json]
+  limit: 10
+greffier: {text: [greffier, text, -, --focus, "{ref}", --sphere, "{sphere}"]}
+cabinet: {open: []}
+undo:
+  preview: [undo, last, --ref, "{ref}", --dry-run]
+  last: [undo, last, --ref, "{ref}"]
 ```
 
 ## 16. Phases

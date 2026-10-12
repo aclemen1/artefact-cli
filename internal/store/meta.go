@@ -94,7 +94,7 @@ func (s *Store) ReadMeta(ref string) (*MetaResult, error) {
 		}
 	}
 	at := s.now()
-	if err := appendEvent(r.Dir, Event{At: at, Type: "meta", Agent: s.Agent, Outcome: "ok"}); err != nil {
+	if err := appendEvent(r.Dir, Event{At: at, Type: "meta", Agent: s.Agent, By: s.By, Outcome: "ok"}); err != nil {
 		return nil, err
 	}
 	res.Embedded, res.Date = c.Embedded, c.Date
@@ -155,7 +155,7 @@ func (s *Store) Tag(ref string, add, remove []string) (*Card, error) {
 	c.addTags(add)
 	c.removeTags(remove)
 	at := s.now()
-	if err := appendEvent(r.Dir, Event{At: at, Type: "card", Agent: s.Agent, Outcome: "ok", Detail: map[string]any{"fields": []string{"tags"}}}); err != nil {
+	if err := appendEvent(r.Dir, Event{At: at, Type: "card", Agent: s.Agent, By: s.By, Outcome: "ok", Detail: map[string]any{"fields": []string{"tags"}}}); err != nil {
 		return nil, err
 	}
 	return c, s.saveCard(r, c, at)

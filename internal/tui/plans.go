@@ -356,7 +356,7 @@ func (m *model) assignClass(it store.ListItem, r treeRow) tea.Cmd {
 	}
 	m.planView = m.planView.parent
 	return m.job("classify "+it.Title, func() doneMsg {
-		res, err := m.st.SetClass(it.URI, r.plan, node, who())
+		res, err := m.st.SetClass(it.URI, r.plan, node, m.who())
 		if err != nil {
 			return doneMsg{err: err}
 		}

@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/aclemen1/artefact-cli/internal/actor"
 	"github.com/aclemen1/artefact-cli/internal/config"
 	"github.com/aclemen1/artefact-cli/internal/index"
 	"github.com/aclemen1/artefact-cli/internal/keys"
@@ -41,7 +42,15 @@ func open(ctx *spec.Context) (*store.Store, error) {
 	if ctx.Access != nil {
 		spheres, agent = ctx.Access.Spheres, ctx.Access.Agent
 	}
-	return store.Open(cfg, spheres, agent)
+	s, err := store.Open(cfg, spheres, agent)
+	if err != nil {
+		return nil, err
+	}
+	s.By = ctx.By
+	if s.By == "" {
+		s.By = actor.Unknown
+	}
+	return s, nil
 }
 
 // wrap maps store errors onto the envelope's kinds.
@@ -505,7 +514,7 @@ func init() {
 				}
 				created = true
 			}
-			s, err := store.Open(cfg, nil, "artefact-cli/"+Version)
+			s, err := openAs(ctx, cfg, nil)
 			if err != nil {
 				return nil, wrap(err)
 			}
@@ -665,6 +674,9 @@ func Invoke(a *spec.Action, ctx *spec.Context) (any, error) {
 		if !ctx.Access.Can(a.Right) {
 			return nil, spec.Forbidden("this token lacks the %s right that %s needs", a.Right, a.Name)
 		}
+	}
+	if err := sign(a, ctx); err != nil {
+		return nil, err
 	}
 	return a.Run(ctx)
 }
